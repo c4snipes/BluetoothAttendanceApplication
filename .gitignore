@@ -1,0 +1,34 @@
+# Python-related ignores
+*.py[cod]
+__pycache__/
+
+# Ignore all pickle files
+*.pkl
+*.pickle
+
+# Log files
+*.log
+
+# Virtual environment
+.venv/
+env/
+venv/
+ENV/
+
+# VS Code settings
+.vscode/
+
+# macOS specific ignores
+.DS_Store
+
+# Windows specific ignores
+Thumbs.db
+desktop.ini
+
+# Other potentially confidential files
+*.env
+*.key
+*.crt
+
+# Ignore HTML files (if needed)
+*.html

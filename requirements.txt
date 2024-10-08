@@ -1,0 +1,11 @@
+bleak==0.22.2
+tkintertable
+pandas
+numpy
+scikit-learn
+matplotlib
+ml_model
+beautifulsoup4
+PILLOW
+requests
+pytest
