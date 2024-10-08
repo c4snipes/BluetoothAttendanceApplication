@@ -1,6 +1,6 @@
 # gui.py
 
-
+import os
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from attendance import AttendanceManager
@@ -17,7 +17,8 @@ class AttendanceApp:
     def __init__(self, master):
         self.master = master
         master.title("Bluetooth-Based Attendance Application")
-        self.new_unassigned_devices = {}  # Add this line
+        self.new_unassigned_devices = {}
+        self.scan_count = 0
 
         # Configure the master window to allow resizing
         master.columnconfigure(0, weight=1)
@@ -33,15 +34,12 @@ class AttendanceApp:
 
         # GUI Elements from widgets.py
         self.notebook = widgets.create_notebook(self.master)
-
-        # Ensure the notebook expands with the window
         self.notebook.pack(fill='both', expand=True)
-        
-        self.unrecognized_devices = {}  # If used elsewhere
 
         # Create the Settings tab
         self.delete_button, self.theme_combo, self.add_class_button, self.class_entry, \
-        self.add_code_button, self.new_code_entry, self.class_codes_display, self.import_html_button = widgets.create_settings_tab(self.notebook, self.valid_class_codes)
+        self.add_code_button, self.new_code_entry, self.class_codes_display, self.import_html_button, \
+        self.export_all_button = widgets.create_settings_tab(self.notebook, self.valid_class_codes)
 
         # Bind events for settings
         self.add_code_button.config(command=self.add_new_class_code)
@@ -49,9 +47,10 @@ class AttendanceApp:
         self.delete_button.config(command=self.delete_database)
         self.theme_combo.bind('<<ComboboxSelected>>', self.change_theme)
         self.add_class_button.config(command=self.add_class)
+        self.export_all_button.config(command=self.export_all_classes)
 
         # Initialize class tabs
-        self.class_widgets = {}  # class_name: widgets_dict
+        self.class_widgets = {}
         self.create_class_tabs()
 
         # Start scanning
@@ -72,6 +71,7 @@ class AttendanceApp:
             messagebox.showwarning("Duplicate Code", f"The class code '{new_code}' already exists.")
         else:
             messagebox.showwarning("Invalid Input", "Please enter a valid class code.")
+
     def create_class_tabs(self):
         """Create tabs for all existing classes."""
         classes = self.attendance_manager.classes.keys()
@@ -82,39 +82,25 @@ class AttendanceApp:
         class_frame = ttk.Frame(self.notebook)
         self.notebook.add(class_frame, text=class_name)
 
-        # Create a notebook for subtabs within the class tab
-        class_notebook = ttk.Notebook(class_frame)
-        class_notebook.pack(fill='both', expand=True)
-
-        # Create the Attendance tab
-        attendance_tab = ttk.Frame(class_notebook)
-        class_notebook.add(attendance_tab, text='Attendance')
-
-        # Create the Device Assignment tab
-        device_tab = ttk.Frame(class_notebook)
-        class_notebook.add(device_tab, text='Device Assignment')
+        # Create the Attendance tab directly without a sub-notebook
+        attendance_tab = ttk.Frame(class_frame)
+        attendance_tab.pack(fill='both', expand=True)
 
         # Now, create widgets for the Attendance tab
         button_frame, present_frame_container, absent_frame_container, \
         import_button, add_student_button, stop_scan_button, log_text, \
-        interval_var, rssi_var, quit_button = widgets.create_class_tab_widgets_with_photos(attendance_tab)
+        interval_var, rssi_var, quit_button, export_button = widgets.create_class_tab_widgets_with_photos(attendance_tab)
 
         # Create scrollable frames for present and absent students
         present_frame = widgets.create_scrollable_frame(present_frame_container)
         absent_frame = widgets.create_scrollable_frame(absent_frame_container)
 
-        # Create widgets for the Device Assignment tab
-        devices_frame_widgets = widgets.create_device_assignment_tab(device_tab)
-
         # Store references to these widgets
         self.class_widgets[class_name] = {
             'attendance_tab': attendance_tab,
-            'device_tab': device_tab,
             'button_frame': button_frame,
             'present_frame': present_frame,
             'absent_frame': absent_frame,
-            'devices_listbox': devices_frame_widgets['devices_listbox'],
-            'assign_device_button': devices_frame_widgets['assign_device_button'],
             'import_button': import_button,
             'add_student_button': add_student_button,
             'stop_scan_button': stop_scan_button,
@@ -122,21 +108,19 @@ class AttendanceApp:
             'interval_var': interval_var,
             'rssi_var': rssi_var,
             'quit_button': quit_button,
+            'export_button': export_button,
             'present_student_widgets': {},
             'absent_student_widgets': {},
         }
 
         # Configure buttons
-        import_button.config(command=lambda cn=class_name: self.import_students_from_html(cn))
+        import_button.config(command=lambda cn=class_name: self.import_students(cn))
         add_student_button.config(command=lambda cn=class_name: self.add_student(cn))
         stop_scan_button.config(command=self.toggle_scanning)
         quit_button.config(command=self.on_closing)
+        export_button.config(command=lambda cn=class_name: self.export_attendance(cn))
 
-        # Assign Device button in Device Assignment tab
-        assign_device_button = self.class_widgets[class_name]['assign_device_button']
-        assign_device_button.config(command=lambda cn=class_name: self.assign_device_to_student_ui(cn))
-
-        # Bind events to the dropdowns using 'write' instead of 'w'
+        # Bind events to the dropdowns
         interval_var.trace_add('write', lambda *args, cn=class_name: self.update_scan_interval(cn))
         rssi_var.trace_add('write', lambda *args, cn=class_name: self.update_rssi_threshold(cn))
 
@@ -156,7 +140,6 @@ class AttendanceApp:
                 self.class_widgets.clear()
                 # Clear unrecognized devices
                 self.new_unassigned_devices.clear()
-                self.unrecognized_devices.clear()
                 messagebox.showinfo("Database Deleted", "Student database has been deleted.")
                 self.gui_log_message("Deleted student database.")
             else:
@@ -240,9 +223,9 @@ class AttendanceApp:
 
     def import_students_from_html(self, class_name, file_path):
         try:
-            from html_parse import parse_html_file  # Assuming this is your custom HTML parser
-            class_students = parse_html_file(file_path)  # Parse the HTML file
-            
+            from html_parse import parse_html_file
+            class_students = parse_html_file(file_path)
+
             if class_students:
                 if class_name in class_students:
                     students = class_students[class_name]
@@ -259,6 +242,7 @@ class AttendanceApp:
         except Exception as e:
             messagebox.showerror("Import Error", f"Failed to import students into class {class_name}: {e}")
             self.gui_log_message(f"Failed to import students into class {class_name}: {e}", "error")
+
     def import_class_from_html(self):
         """Handles importing multiple classes and students from an HTML file."""
         file_path = filedialog.askopenfilename(
@@ -271,20 +255,17 @@ class AttendanceApp:
 
         try:
             from html_parse import parse_html_file
-            class_students = parse_html_file(file_path)  # Parse the HTML file for classes and students
+            class_students = parse_html_file(file_path)
 
             if class_students:
-                # Define the list of valid class code prefixes
-                valid_class_codes = ["CSCI", "SWEN", "ENGR", "MENG"]
-
                 for class_name, students in class_students.items():
                     # Check if the class name contains any of the valid class codes
-                    if any(code in class_name for code in valid_class_codes):
+                    if any(code in class_name for code in self.valid_class_codes):
                         # Add the class if not already present
                         if class_name not in self.class_widgets:
                             self.attendance_manager.add_class(class_name)
                             self.create_class_tab(class_name)
-                        
+
                         # Import the students for the class
                         self.attendance_manager.import_students_with_photos(class_name, students)
                         self.update_student_lists(class_name)
@@ -301,8 +282,6 @@ class AttendanceApp:
             messagebox.showerror("Import Error", f"Failed to import classes and students from HTML: {e}")
             self.gui_log_message(f"Failed to import classes and students from HTML: {e}", "error")
 
-        
-
     def import_students_from_csv(self, class_name, file_path):
         try:
             students = []
@@ -312,7 +291,7 @@ class AttendanceApp:
                     if student_name:
                         student = {
                             'name': student_name,
-                            'student_id': student_name,  # Using name as ID for simplicity
+                            'student_id': student_name,
                             'email': '',
                             'photo_url': None
                         }
@@ -330,22 +309,22 @@ class AttendanceApp:
 
     def add_student(self, class_name):
         """Add a new student manually to a class."""
-        
+
         def save_student(event=None):
             student_name = name_entry.get().strip()
             if student_name:
-                # Create a student dictionary 
+                # Create a student dictionary
                 student = {
                     'name': student_name,
-                    'student_id': student_name,  # You might want to prompt for a unique ID
-                    'email': '',  
-                    'photo_url': None  # Optionally generate or set a photo URL
+                    'student_id': student_name,
+                    'email': '',
+                    'photo_url': None
                 }
                 try:
                     self.attendance_manager.import_students_with_photos(class_name, [student])
                     self.update_student_lists(class_name)
                     self.gui_log_message(f"Added student {student_name} to class {class_name}.")
-                    name_entry.delete(0, tk.END)  # Clear the entry field
+                    name_entry.delete(0, tk.END)
                     messagebox.showinfo("Success", f"Student {student_name} added to class {class_name}.")
                     add_window.destroy()
                 except Exception as e:
@@ -374,7 +353,6 @@ class AttendanceApp:
         close_button = ttk.Button(add_window, text="Close", command=add_window.destroy)
         close_button.pack(pady=5)
 
-
     def update_student_lists(self, class_name):
         widgets_dict = self.class_widgets.get(class_name)
         if not widgets_dict:
@@ -398,13 +376,13 @@ class AttendanceApp:
         for student_id in present_students:
             student = students.get(student_id)
             if student:
-                student_widget = self.create_student_widget(widgets_dict['present_frame'], student, class_name, present=True)
+                student_widget = self.create_student_widget(widgets_dict['present_frame'], student, student_id, class_name, present=True)
                 widgets_dict['present_student_widgets'][student_id] = student_widget
 
         # Update Absent Students
         for student_id, student in students.items():
             if student_id not in present_students:
-                student_widget = self.create_student_widget(widgets_dict['absent_frame'], student, class_name, present=False)
+                student_widget = self.create_student_widget(widgets_dict['absent_frame'], student, student_id, class_name, present=False)
                 widgets_dict['absent_student_widgets'][student_id] = student_widget
 
         # Determine weights based on student counts
@@ -420,33 +398,6 @@ class AttendanceApp:
         list_frame.columnconfigure(0, weight=present_weight)
         list_frame.columnconfigure(1, weight=absent_weight)
 
-
-    def create_student_widget(self, parent_frame, student, class_name, present):
-        frame = ttk.Frame(parent_frame, relief='raised', borderwidth=1)
-        frame.pack(padx=5, pady=5, fill='x')
-
-        # Load student image
-        image = self.get_student_image(student)
-        image_label = ttk.Label(frame, image=image)
-        image_label.image = image  # Keep a reference to avoid garbage collection
-        image_label.pack(side='left', padx=5, pady=5)
-
-        # Student name label
-        name_label = ttk.Label(frame, text=student['name'])
-        name_label.pack(side='left', padx=5)
-
-        # Button to toggle attendance status
-        if present:
-            action_button = ttk.Button(frame, text="Mark Absent",
-                                       command=lambda: self.mark_student_absent(class_name, student['student_id']))
-        else:
-            action_button = ttk.Button(frame, text="Mark Present",
-                                       command=lambda: self.mark_student_present(class_name, student['student_id']))
-
-        action_button.pack(side='right', padx=5, pady=5)
-
-        return frame
-    
 
     def get_student_image(self, student):
         url = student.get('photo_url')
@@ -472,7 +423,6 @@ class AttendanceApp:
             log_message(f"Error loading image for {student['name']}: {e}", "error")
             return ImageTk.PhotoImage(Image.new('RGB', (100, 100), color='gray'))  # Placeholder
 
-
     def mark_student_present(self, class_name, student_id):
         try:
             self.attendance_manager.mark_student_present(class_name, student_id)
@@ -493,126 +443,80 @@ class AttendanceApp:
 
     def handle_scan_results(self, found_devices):
         try:
+            self.scan_count += 1
+            self.found_devices = found_devices  # Keep a reference to the latest found devices
+
             # Update attendance based on found devices
             self.attendance_manager.update_attendance(found_devices)
 
-            # Track first detected time for each device
+            # Track first and last detected scan count for each device
             for addr, device_info in found_devices.items():
                 if addr not in self.new_unassigned_devices:
-                    device_info['first_detected'] = datetime.now()  # Store the first detection time
+                    device_info['first_seen_scan'] = self.scan_count  # Store the first detection scan count
+                    device_info['last_seen_scan'] = self.scan_count
                     self.new_unassigned_devices[addr] = device_info
                 else:
-                    # Don't overwrite 'first_detected' if the device was already seen
-                    if 'first_detected' not in self.new_unassigned_devices[addr]:
-                        self.new_unassigned_devices[addr]['first_detected'] = datetime.now()
+                    # Update last_seen_scan
+                    self.new_unassigned_devices[addr]['last_seen_scan'] = self.scan_count
 
-            # Refresh the GUI to show updated attendance and devices
+            # Update count_since_seen for all devices
+            for addr, device_info in self.new_unassigned_devices.items():
+                device_info['count_since_seen'] = self.scan_count - device_info.get('last_seen_scan', self.scan_count)
+
+            # Refresh the GUI to show updated attendance
             for class_name in list(self.class_widgets.keys()):
                 self.master.after(0, self.update_student_lists, class_name)
-                self.master.after(0, self.update_unrecognized_devices, class_name)
         except Exception as e:
             log_message(f"Error occurred during scanning: {e}", "error")
 
 
-
-
-    def notify_new_device(self, addr, device_info):
-        """Notify about a newly detected unassigned device."""
-        name = device_info['name'] or 'Unknown'
-        display_text = f"{name} ({addr})"
-
-        # Insert the new device at the top of the listbox in each class
-        for class_name, widgets in self.class_widgets.items():
-            devices_listbox = widgets.get('devices_listbox')
-            if devices_listbox:
-                devices_listbox.insert(0, display_text)
-
-        # Log that a new device has been detected
-        self.gui_log_message(f"New device detected: {display_text}")
-
-
-    def update_unrecognized_devices(self, class_name):
-        """Refresh the Detected Devices list for a class."""
-        widgets = self.class_widgets.get(class_name)
-        if not widgets:
+    def assign_device_to_student_ui(self, class_name, student_id):
+        """Assign a device to a student in a class."""
+        # Get unassigned devices
+        unassigned_devices = self.attendance_manager.get_unassigned_devices(self.found_devices)
+        if not unassigned_devices:
+            messagebox.showwarning("No Unassigned Devices", "There are no unassigned devices detected.")
             return
 
-        devices_listbox = widgets['devices_listbox']
-        if devices_listbox.winfo_exists():
-            devices_listbox.delete(0, tk.END)
-
-            # Sort devices by the time they were first detected
-            sorted_unrecognized = sorted(self.new_unassigned_devices.items(),
-                                        key=lambda item: item[1]['first_detected'])
-
-            for addr, device_info in sorted_unrecognized:
-                name = device_info['name'] or 'Unknown'
-                rssi = device_info['rssi']
-                first_detected = device_info.get('first_detected').strftime('%H:%M:%S')
-                display_name = f"{name} ({addr}) - RSSI: {rssi} - First Seen: {first_detected}"
-                devices_listbox.insert(tk.END, display_name)
-
-
-
-
-    def assign_device_to_student_ui(self, class_name):
-        """Assign a selected device from the Detected Devices list to a student in a class."""
-        # Get the class widgets and make sure they exist
-        widgets = self.class_widgets.get(class_name)
-        if not widgets:
-            return
-
-        devices_listbox = widgets['devices_listbox']
-
-        # Ensure there is a device selected
-        selected_index = devices_listbox.curselection()
-        if selected_index:
-            # Extract the device's address from the selection
-            selected_device_info = devices_listbox.get(selected_index)
-            addr = selected_device_info.split('(')[-1].split(')')[0]
-            self.assign_device_to_student_from_ui(class_name, addr)
-        else:
-            messagebox.showwarning("No Device Selected", "Please select a device to assign.")
-
-
-    def assign_device_to_student_from_ui(self, class_name, addr):
-        """Open a window to assign a specific device to a student in a class."""
         assign_window = tk.Toplevel(self.master)
-        assign_window.title(f"Assign Device {addr} to {class_name}")
+        assign_window.title(f"Assign Device to {student_id} in {class_name}")
 
-        ttk.Label(assign_window, text=f"Select the student to assign device {addr} to:").pack(pady=5)
+        ttk.Label(assign_window, text="Select the device to assign:").pack(pady=5)
 
-        # Create a listbox to display the students in the class
-        student_listbox = tk.Listbox(assign_window)
-        student_listbox.pack(pady=5, expand=True, fill=tk.BOTH)
+        # Create a listbox to display the devices
+        device_listbox = tk.Listbox(assign_window, selectmode=tk.SINGLE)
+        device_listbox.pack(pady=5, expand=True, fill=tk.BOTH)
 
-        # Populate the listbox with students from the class
-        students = self.attendance_manager.get_all_students(class_name)
-        for student_id, student in students.items():
-            display_text = f"{student_id} - {student['name']}"
-            student_listbox.insert(tk.END, display_text)
+        # Populate the listbox with unassigned devices
+        for addr, device_info in unassigned_devices.items():
+            name = device_info['name'] or 'Unknown'
+            count_since_seen = device_info.get('count_since_seen', 0)
+            addr_short = addr[-4:]
+            display_text = f"{name} ({addr_short}) - Seen {count_since_seen} scans ago"
+            device_listbox.insert(tk.END, display_text)
 
-        def assign_selected_student():
-            # Get the selected student from the listbox
-            selected_index = student_listbox.curselection()
+
+        def assign_selected_device():
+            # Ensure there is a device selected
+            selected_index = device_listbox.curselection()
             if selected_index:
-                # Extract the student ID from the selection
-                selected_student_info = student_listbox.get(selected_index)
-                student_id = selected_student_info.split(' - ')[0]
+                # Extract the device's address from the selection
+                selected_device_info = device_listbox.get(selected_index)
+                addr = selected_device_info.split('(')[-1].split(')')[0]
                 try:
                     # Assign the device to the student
                     self.attendance_manager.assign_device_to_student(class_name, student_id, addr)
                     self.gui_log_message(f"Assigned device {addr} to student {student_id} in class {class_name}.")
-                    assign_window.destroy()  # Close the student selection window
+                    assign_window.destroy()  # Close the window after assignment
+                    self.update_student_lists(class_name)  # Refresh the student list to show updated MAC
                 except Exception as e:
                     messagebox.showerror("Assignment Error", f"Failed to assign device: {e}")
                     self.gui_log_message(f"Failed to assign device {addr} to student {student_id}: {e}", "error")
             else:
-                messagebox.showwarning("No Selection", "Please select a student.")
+                messagebox.showwarning("No Device Selected", "Please select a device to assign.")
 
-        # Add the assign button to confirm the student selection
-        ttk.Button(assign_window, text="Assign Device", command=assign_selected_student).pack(pady=5)
-
+        # Add the assign button to confirm the device selection
+        ttk.Button(assign_window, text="Assign Device", command=assign_selected_device).pack(pady=5)
 
     def update_scan_interval(self, class_name):
         """Update the scan interval based on user selection."""
@@ -651,7 +555,7 @@ class AttendanceApp:
         log_entry = f"[{current_time}] {message}\n"
 
         # Log to the GUI
-        for widgets in self.class_widgets.values():
+        for widgets in self.class_widgets.values():  # noqa: F402
             log_text = widgets.get('log_text')
             if log_text and log_text.winfo_exists():
                 log_text.configure(state='normal')
@@ -661,3 +565,47 @@ class AttendanceApp:
 
         # Log to the file or console
         log_message(message, level)
+
+    def export_attendance(self, class_name):
+        """Export attendance data for the class."""
+        file_path = filedialog.asksaveasfilename(
+            title="Export Attendance",
+            defaultextension=".csv",
+            filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")]
+        )
+        if file_path:
+            try:
+                class_data = self.attendance_manager.classes.get(class_name, {})
+                students = class_data.get('students', {})
+                present_students = class_data.get('present_students', set())
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write("Student ID,Name,Status\n")
+                    for student_id, student in students.items():
+                        status = "Present" if student_id in present_students else "Absent"
+                        f.write(f"{student_id},{student['name']},{status}\n")
+                messagebox.showinfo("Export Success", f"Attendance exported successfully to {file_path}")
+                self.gui_log_message(f"Exported attendance for class {class_name} to {file_path}")
+            except Exception as e:
+                messagebox.showerror("Export Error", f"Failed to export attendance: {e}")
+                self.gui_log_message(f"Failed to export attendance for class {class_name}: {e}", "error")
+
+    def export_all_classes(self):
+        """Export attendance data for all classes."""
+        directory = filedialog.askdirectory(title="Select Directory to Save Attendance Files")
+        if directory:
+            try:
+                for class_name in self.attendance_manager.classes.keys():
+                    file_path = os.path.join(directory, f"{class_name}_attendance.csv")
+                    class_data = self.attendance_manager.classes.get(class_name, {})
+                    students = class_data.get('students', {})
+                    present_students = class_data.get('present_students', set())
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        f.write("Student ID,Name,Status\n")
+                        for student_id, student in students.items():
+                            status = "Present" if student_id in present_students else "Absent"
+                            f.write(f"{student_id},{student['name']},{status}\n")
+                messagebox.showinfo("Export Success", f"Attendance exported successfully to {directory}")
+                self.gui_log_message(f"Exported attendance for all classes to {directory}")
+            except Exception as e:
+                messagebox.showerror("Export Error", f"Failed to export attendance: {e}")
+                self.gui_log_message(f"Failed to export attendance for all classes: {e}", "error")

@@ -69,21 +69,21 @@ class AttendanceManager:
 
 
     def assign_device_to_student(self, class_name, student_id, addr):
-        """
-        Assign a Bluetooth MAC address to a student in a class.
-
-        :param class_name: Name of the class.
-        :param student_id: ID of the student.
-        :param addr: MAC address to assign.
-        """
         with self.lock:
             addr_upper = addr.upper()
             if class_name not in self.classes:
                 return
             class_data = self.classes[class_name]
+            # Remove the MAC address from any other student in this class
+            for sid, macs in class_data['student_mac_addresses'].items():
+                if addr_upper in macs and sid != student_id:
+                    macs.discard(addr_upper)
+                    log_message(f"Removed MAC address {addr_upper} from student {sid} in class {class_name}")
+            # Assign the MAC address to the student
             class_data['student_mac_addresses'][student_id].add(addr_upper)
             self.save_data()
             log_message(f"Assigned device {addr_upper} to {student_id} in class {class_name}.")
+
 
     def get_all_assigned_macs(self):
         """
@@ -156,3 +156,9 @@ class AttendanceManager:
             class_data['absent_students'].add(student_id)
             self.save_data()
             log_message(f"Manually marked {student_id} as absent in class {class_name}.")
+            
+    def get_assigned_macs_for_student(self, class_name, student_id):
+        with self.lock:
+            class_data = self.classes.get(class_name, {})
+            macs = class_data.get('student_mac_addresses', {}).get(student_id, set())
+            return macs
