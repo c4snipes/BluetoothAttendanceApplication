@@ -9,7 +9,7 @@ The **Bluetooth-Based Attendance Application** brings ease and automation to the
 - **Real-Time Bluetooth Device Scanning**: Continuously scans nearby Bluetooth devices to detect student presence.
 - **Dynamic Device Assignment**: Automatically detects new devices and allows professors to assign them to specific students seamlessly.
 - **Student Management**: 
-  - Import student names from a CSV file.
+  - Import student names from a HTML file.
   - Add students manually through the GUI.
 - **Attendance Tracking**:
   - **Mark Present/Absent**: Automatically marks students as present based on device detection.
