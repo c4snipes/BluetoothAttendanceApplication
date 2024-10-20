@@ -10,3 +10,5 @@ PILLOW
 requests
 pytest
 PyQt5
+ntk
+pyperclip
