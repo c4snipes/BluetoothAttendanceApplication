@@ -1,11 +1,12 @@
 # export.py
 
+import logging
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import csv
 import os
-from utils import log_message
 from attendance import AttendanceManager
+
 
 class Disseminate:
     def __init__(self, master, attendance_manager):
@@ -30,15 +31,18 @@ class Disseminate:
                 selected_fields = self.select_export_fields()
                 if not selected_fields:
                     messagebox.showwarning("No Fields Selected", "No fields selected for export.")
+                    logging.warning("User did not select any fields for export.")
                     return
 
                 for class_name in self.attendance_manager.classes:
                     self.export_attendance(class_name, directory, selected_fields, bulk_export=True)
                 messagebox.showinfo("Export Success", "Attendance exported for all classes successfully.")
-                log_message("Exported attendance for all classes.")
+                logging.info("Exported attendance for all classes.")
             except Exception as e:
                 messagebox.showerror("Export All Error", f"Failed to export attendance: {e}")
-                log_message(f"Failed to export attendance for all classes: {e}", "error")
+                logging.error(f"Failed to export attendance for all classes: {e}")
+        else:
+            logging.info("Export all classes operation canceled by user.")
 
     def export_attendance(self, class_name, directory=None, selected_fields=None, bulk_export=False):
         """
@@ -57,16 +61,12 @@ class Disseminate:
             selected_fields = self.select_export_fields()
             if not selected_fields:
                 messagebox.showwarning("No Fields Selected", "No fields selected for export.")
+                logging.warning("User did not select any fields for export.")
                 return
 
         # If bulk_export and selected_fields not provided, handle error
         if bulk_export and selected_fields is None:
-            log_message("Selected fields must be provided for bulk export.", "error")
-            return
-
-        # If fields are still not selected, abort export
-        if not selected_fields:
-            messagebox.showwarning("No Fields Selected", "No fields selected for export.")
+            logging.error("Selected fields must be provided for bulk export.")
             return
 
         # Determine file path
@@ -82,6 +82,12 @@ class Disseminate:
 
         if file_path:
             try:
+                # Check if file already exists and confirm overwrite
+                if not bulk_export and os.path.exists(file_path):
+                    if not messagebox.askyesno("Overwrite Confirmation", f"The file '{os.path.basename(file_path)}' already exists. Do you want to overwrite it?"):
+                        logging.info(f"User canceled overwriting the file '{file_path}'.")
+                        return
+
                 with open(file_path, "w", newline='', encoding='utf-8') as csvfile:
                     writer = csv.writer(csvfile)
                     writer.writerow(selected_fields)  # Write selected fields as headers
@@ -106,17 +112,21 @@ class Disseminate:
                             row.append(timestamp.strftime('%Y-%m-%d %H:%M:%S') if timestamp else "Never")
                         writer.writerow(row)
                 if bulk_export:
-                    log_message(f"Exported attendance for class '{class_name}' to '{file_path}'.", "info")
+                    logging.info(f"Exported attendance for class '{class_name}' to '{file_path}'.")
                 else:
                     messagebox.showinfo("Export Success", f"Attendance for class '{class_name}' exported successfully.")
-                    log_message(f"Exported attendance for class '{class_name}' to '{file_path}'.", "info")
+                    logging.info(f"Exported attendance for class '{class_name}' to '{file_path}'.")
             except Exception as e:
                 if bulk_export:
                     messagebox.showerror("Export Error", f"Failed to export attendance for class '{class_name}': {e}")
-                    log_message(f"Failed to export attendance for class '{class_name}': {e}", "error")
+                    logging.error(f"Failed to export attendance for class '{class_name}': {e}")
                 else:
                     messagebox.showerror("Export Error", f"Failed to export attendance: {e}")
-                    log_message(f"Failed to export attendance for class '{class_name}': {e}", "error")
+                    logging.error(f"Failed to export attendance for class '{class_name}': {e}")
+        else:
+            if not bulk_export:
+                logging.info("Export attendance operation canceled by user.")
+            # No action needed if bulk export and file path is not provided
 
     def select_export_fields(self):
         """
@@ -124,6 +134,8 @@ class Disseminate:
 
         :return: List of selected fields.
         """
+        selected_fields = []
+
         export_popup = tk.Toplevel(self.master)
         export_popup.title("Select Fields to Export")
         export_popup.geometry("300x250")
@@ -133,13 +145,16 @@ class Disseminate:
         # List of exportable fields
         fields = ["Student ID", "Name", "MAC Address", "Attendance Count", "Last Seen Time"]
 
-        selected_fields = []
         checkboxes = {}
-        var_states = {}
 
         def on_export_confirm():
-            selected_fields[:] = [field for field, var in checkboxes.items() if var.get()]
-            export_popup.destroy()
+            selected = [field for field, var in checkboxes.items() if var.get()]
+            if selected:
+                selected_fields.extend(selected)
+                export_popup.destroy()
+            else:
+                messagebox.showwarning("No Fields Selected", "Please select at least one field to export.")
+                logging.warning("User attempted to export without selecting any fields.")
 
         def on_export_cancel():
             export_popup.destroy()
@@ -178,7 +193,7 @@ class Disseminate:
         cancel_btn.grid(row=0, column=1, padx=5)
 
         # Center the popup on the screen
-        self.master.update_idletasks()
+        export_popup.update_idletasks()
         x = (self.master.winfo_screenwidth() // 2) - (export_popup.winfo_width() // 2)
         y = (self.master.winfo_screenheight() // 2) - (export_popup.winfo_height() // 2)
         export_popup.geometry(f"+{x}+{y}")

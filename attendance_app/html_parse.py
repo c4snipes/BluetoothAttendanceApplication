@@ -1,9 +1,18 @@
-#html_parse.py
+# html_parse.py
+
 import re
+import logging
 from bs4 import BeautifulSoup
-from utils import is_valid_url, log_message
+import requests
 
 def parse_html_file(html_file, valid_class_codes):
+    """
+    Parse an HTML file to extract class and student information.
+
+    :param html_file: Path to the HTML file to parse.
+    :param valid_class_codes: List of valid class codes to filter classes.
+    :return: Dictionary with class names as keys and lists of student dictionaries as values.
+    """
     class_students = {}
     with open(html_file, 'r', encoding='utf-8') as f:
         soup = BeautifulSoup(f, 'html.parser')
@@ -13,10 +22,11 @@ def parse_html_file(html_file, valid_class_codes):
     for heading in class_headings:
         class_name_raw = heading.get_text(strip=True)
 
-        pattern = r'\b((?:' + '|'.join(valid_class_codes) + r')-\d+[-\w]*)\b'
+        # Improved pattern to handle more variations
+        pattern = r'\b(' + '|'.join(valid_class_codes) + r')-\d{3}(?:-\d+)?(?:-\w+)?\b'
         match = re.search(pattern, class_name_raw)
         if match:
-            class_name = match.group(1)
+            class_name = match.group(0)
         else:
             continue  # Skip if no valid class code is found
 
@@ -32,17 +42,28 @@ def parse_html_file(html_file, valid_class_codes):
                 img_tag = cell.find('img')
                 if img_tag and 'src' in img_tag.attrs:
                     student['photo_url'] = img_tag['src']
+                else:
+                    # Attempt to generate a photo URL
+                    # Note: We'll fill in the name and email first
+                    text_parts = cell.get_text(separator='|').split('|')
+                    if len(text_parts) >= 1:
+                        student['name'] = text_parts[0].strip()
+                    if len(text_parts) >= 2:
+                        student['student_id'] = text_parts[1].strip()
+                    if len(text_parts) >= 3:
+                        student['email'] = text_parts[2].strip()
+                    student['photo_url'] = generate_photo_url(student.get('name'), student.get('email'))
 
                 # Extract student details
                 text_parts = cell.get_text(separator='|').split('|')
-                if len(text_parts) >= 3:
+                if len(text_parts) >= 1:
                     student['name'] = text_parts[0].strip()
-                    student['student_id'] = student.get('student_id', text_parts[1].strip())
-                    student['email'] = text_parts[2].strip()
-                    students.append(student)  # Only append if student_id is available
+                    student['student_id'] = text_parts[1].strip() if len(text_parts) > 1 else None
+                    student['email'] = text_parts[2].strip() if len(text_parts) > 2 else None
+                    students.append(student)
                 else:
-                    # Log or handle incomplete student data
-                    log_message(f"Incomplete student data found in class {class_name}: {cell.get_text()}", "warning")
+                    # Log or handle cells with no text data
+                    logging.warning(f"No student data found in class {class_name}: {cell}")
 
             # Add students to the class in the dictionary
             if class_name not in class_students:
@@ -50,6 +71,21 @@ def parse_html_file(html_file, valid_class_codes):
             class_students[class_name].extend(students)
 
     return class_students
+
+def is_valid_url(url):
+    """
+    Check if the given URL is valid and accessible.
+
+    :param url: URL to check.
+    :return: True if the URL is valid and accessible, False otherwise.
+    """
+    try:
+        response = requests.get(url, allow_redirects=True, stream=True, timeout=5)
+        return response.status_code == 200
+    except Exception as e:
+        logging.error(f"Error validating URL '{url}': {e}")
+        return False
+
 def generate_photo_url(student_name, email=None):
     """
     Generate the photo URL based on the student's name and handle duplicates by appending numbers.
@@ -79,15 +115,13 @@ def generate_photo_url(student_name, email=None):
                 if is_valid_url(photo_url_candidate):
                     return photo_url_candidate
 
-            # Optionally, try using the email username if available
         if email:
             email_username = email.split('@')[0]
             photo_url_candidate = f"https://directoryphotos.uindy.edu/{email_username}"
             if is_valid_url(photo_url_candidate):
                 return photo_url_candidate
 
-            # If none of the patterns result in a valid URL, return None
         return None
-    except (ValueError, AttributeError) as e:
-        log_message(f"Error generating photo URL for {student_name}: {e}", "error")
+    except Exception as e:
+        logging.error(f"Error generating photo URL for '{student_name}': {e}")
         return None

@@ -1,24 +1,20 @@
 # gui.py
 
-from io import BytesIO
-import os
-import re
-import threading
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox
 from PIL import Image, ImageTk
-from datetime import datetime
+import threading
+import logging
+from io import BytesIO
+import re
 import requests
-import export  # Import the export function
-from html_parse import parse_html_file
 from attendance import AttendanceManager
 from scanner import Scanner
-from utils import log_message
-import utils
-import widgets
-from widgets import ToolTip
-from import_att import importApp
 from export import Disseminate
+from import_att import ImportApp
+import widgets
+from html_parse import is_valid_url
+from widgets import ToolTip
 
 class AttendanceApp:
     def __init__(self, master):
@@ -26,27 +22,24 @@ class AttendanceApp:
         master.title("Bluetooth-Based Attendance Application")
         master.geometry("1024x768")  # Set a default window size
 
-        # Initialize threading lock
-        self.lock = threading.RLock()
-
         # Initialize AttendanceManager and Scanner
         self.attendance_manager = AttendanceManager()
         self.scanner = Scanner(callback=self.handle_scan_results)
-        self.importion = importApp(self.attendance_manager)
+        self.importer = ImportApp(self.attendance_manager)
         self.disseminate = Disseminate(self.master, self.attendance_manager)
         self.found_devices = {}
         self.scan_count = 0
+        self.scanning = False  # Initialize scanning flag
 
         # Create the notebook (tabbed interface)
         self.notebook = widgets.create_notebook(master)
 
+        # Setup centralized logging
+        self.setup_gui_logging()
+
         # Initialize class tabs
         self.class_widgets = {}
         self.create_class_tabs()
-        
-        # Start scanning devices
-        self.scanning = True
-        self.scanner.start_scanning()
 
         # Bind the close event
         self.master.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -55,39 +48,21 @@ class AttendanceApp:
         """Create tabs for each class."""
         for class_name in self.attendance_manager.classes.keys():
             self.create_class_tab(class_name)
-        # Optionally, create a settings tab
-        settings_tab = widgets.create_settings_tab(self.notebook, self.attendance_manager.get_valid_class_codes())
-        # Connect settings actions
+
+        # Create settings tab and assign the widgets to `settings_widgets`
+        self.settings_widgets = widgets.create_settings_tab(
+            self.notebook,
+            self.attendance_manager.get_valid_class_codes()
+        )
+        # Connect settings actions after `settings_widgets` has been assigned
         self.connect_settings_actions()
-
-    def stop_scanning(self):
-        """Stop Bluetooth scanning."""
-        if self.scanning:
-            self.scanner.stop_scanning()
-            self.scanning = False
-            log_message("Scanning stopped.")
-
-    def delete_database(self):
-        """Delete the student database."""
-        with self.lock:
-            self.attendance_manager.delete_database()
-            # Optionally, refresh the GUI after deletion
-            for class_name in list(self.class_widgets.keys()):
-                self.notebook.forget(self.class_widgets[class_name]['present_frame'].master)
-                del self.class_widgets[class_name]
-            messagebox.showinfo("Database Deleted", "The student database has been deleted.")
-
-    def on_closing(self):
-        """Handle closing the application."""
-        self.stop_scanning()
-        self.master.destroy()
 
     def create_class_tab(self, class_name):
         class_frame = ttk.Frame(self.notebook)
         self.notebook.add(class_frame, text=class_name)
 
         # Use the widgets from widgets.py
-        class_widgets = widgets.create_class_tab_widgets_with_photos(class_frame)
+        class_widgets_tuple = widgets.create_class_tab_widgets_with_photos(class_frame)
 
         # Unpack the widgets
         (
@@ -96,14 +71,12 @@ class AttendanceApp:
             absent_frame_container,
             import_button,
             add_student_button,
-            stop_scan_button,
-            log_text,
+            scan_toggle_button,
             interval_var,
             rssi_var,
             quit_button,
             export_button,
-            export_all_button,  # Ensure this is included based on previous corrections
-        ) = class_widgets
+        ) = class_widgets_tuple
 
         # Create scrollable frames for present and absent students
         present_frame = widgets.create_scrollable_frame(present_frame_container)
@@ -115,27 +88,28 @@ class AttendanceApp:
             'absent_frame': absent_frame,
             'import_button': import_button,
             'add_student_button': add_student_button,
-            'stop_scan_button': stop_scan_button,
-            'log_text': log_text,
+            'scan_toggle_button': scan_toggle_button,
             'interval_var': interval_var,
             'rssi_var': rssi_var,
             'quit_button': quit_button,
             'export_button': export_button,
-            'export_all_button': export_all_button,
             'present_student_widgets': {},
             'absent_student_widgets': {},
         }
 
+        # Set the scan button text based on current scanning state
+        if self.scanning:
+            scan_toggle_button.config(text="Stop Scanning")
+        else:
+            scan_toggle_button.config(text="Start Scanning")
+
         # Connect button signals
         import_button.config(command=self.import_html_action)
-        add_student_button.config(command=lambda: self.add_student_dialog(class_name))  # Updated
-        stop_scan_button.config(command=self.stop_scanning)
-        # For exporting attendance for a single class
+        add_student_button.config(command=lambda: self.add_student_dialog(class_name))
+        scan_toggle_button.config(command=self.toggle_scanning)
         export_button.config(command=lambda: self.disseminate.export_attendance(class_name))
-        # For exporting all classes
-        export_all_button.config(command=lambda: self.disseminate.export_all_classes())
         quit_button.config(command=self.on_closing)
-        
+
         # Initialize interval and RSSI settings
         interval_var.trace_add('write', lambda *args: self.scanner.update_scan_interval(int(interval_var.get().split()[0])))
         rssi_var.trace_add('write', lambda *args: self.scanner.update_rssi_threshold(self.parse_rssi_value(rssi_var.get())))
@@ -144,27 +118,122 @@ class AttendanceApp:
         self.update_student_lists(class_name)
 
     def connect_settings_actions(self):
-        (
-            delete_button,
-            theme_combo,
-            add_class_button,
-            class_entry,
-            add_code_button,
-            new_code_entry,
-            class_codes_display,
-            import_html_button,
-            export_all_button,
-        ) = self.settings_widgets
+        settings_widgets = self.settings_widgets
+        delete_button = settings_widgets['delete_button']
+        theme_combo = settings_widgets['theme_combo']
+        add_class_button = settings_widgets['add_class_button']
+        class_entry = settings_widgets['class_entry']
+        add_code_button = settings_widgets['add_code_button']
+        new_code_entry = settings_widgets['new_code_entry']
+        valid_class_codes_var = settings_widgets['valid_class_codes_var']
+        import_html_button = settings_widgets['import_html_button']
+        export_all_button = settings_widgets['export_all_button']
 
         delete_button.config(command=self.delete_database)
         theme_combo.bind('<<ComboboxSelected>>', lambda event: widgets.change_theme(theme_combo.get()))
-        add_class_button.config(command=lambda: self.attendance_manager.add_class(class_entry.get()))
-        add_code_button.config(command=lambda: self.add_class_code(new_code_entry.get(), class_codes_display))
-        # Update this line to correctly reference the export_all_classes function
-        export_all_button.config(command=lambda: self.disseminate.export_all_classes())
-
-        # Update to call import_students_from_html
+        add_class_button.config(command=lambda: self.add_class(class_entry.get()))
+        add_code_button.config(command=lambda: self.add_class_code(new_code_entry.get(), valid_class_codes_var))
+        export_all_button.config(command=self.disseminate.export_all_classes)
         import_html_button.config(command=self.import_html_action)
+
+    def setup_gui_logging(self):
+        """
+        Configure logging to send log messages to the centralized Logs tab.
+        """
+        # Create Logs tab
+        log_text = self.create_logs_tab()
+
+        # Define a custom handler that appends to the centralized log_text widget
+        class CentralizedGUIHandler(logging.Handler):
+            def __init__(self, log_widget):
+                super().__init__()
+                self.log_widget = log_widget
+                self.log_widget.configure(state='disabled')  # Make the widget read-only
+
+            def emit(self, record):
+                msg = self.format(record)
+                self.log_widget.after(0, self.append_message, msg)
+
+            def append_message(self, msg):
+                self.log_widget.configure(state='normal')
+                self.log_widget.insert(tk.END, msg + '\n')
+                self.log_widget.configure(state='disabled')
+                self.log_widget.see(tk.END)
+
+        # Create the handler
+        centralized_gui_handler = CentralizedGUIHandler(log_text)
+        centralized_gui_handler.setLevel(logging.DEBUG)
+        gui_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        centralized_gui_handler.setFormatter(gui_formatter)
+
+        # Get the root logger and add handlers
+        logger = logging.getLogger()
+        logger.setLevel(logging.DEBUG)
+
+        # Remove existing handlers to prevent duplicate logs
+        if logger.hasHandlers():
+            logger.handlers.clear()
+
+        # Add file handler
+        file_handler = logging.FileHandler('application.log')
+        file_handler.setLevel(logging.DEBUG)
+        file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(file_formatter)
+        logger.addHandler(file_handler)
+
+        # Add the centralized GUI handler
+        logger.addHandler(centralized_gui_handler)
+
+    def create_logs_tab(self):
+        log_frame = ttk.Frame(self.notebook)
+        self.notebook.add(log_frame, text="Logs")
+
+        log_text = tk.Text(log_frame, height=15, state='disabled', wrap='word')
+        log_text.pack(fill='both', expand=True, padx=10, pady=10)
+
+        return log_text
+
+    def import_html_action(self):
+        """Handle the action triggered by the 'Import HTML' button."""
+        updated_classes = self.importer.import_html_action()
+        for class_name in updated_classes:
+            if class_name not in self.class_widgets:
+                self.create_class_tab(class_name)
+            self.update_student_lists(class_name)
+
+    def toggle_scanning(self):
+        """
+        Toggle the scanning state between active and inactive.
+        """
+        if self.scanning:
+            # Currently scanning; stop scanning
+            self.scanner.stop_scanning()
+            self.scanning = False
+            logging.info("Scanning stopped by user.")
+            # Update button text to "Start Scanning" for all class tabs
+            for class_widget in self.class_widgets.values():
+                class_widget['scan_toggle_button'].config(text="Start Scanning")
+        else:
+            # Currently not scanning; start scanning
+            self.scanner.start_scanning()
+            self.scanning = True
+            logging.info("Scanning started by user.")
+            # Update button text to "Stop Scanning" for all class tabs
+            for class_widget in self.class_widgets.values():
+                class_widget['scan_toggle_button'].config(text="Stop Scanning")
+
+    def delete_database(self):
+        """Delete the student database."""
+        if messagebox.askyesno("Confirm Deletion", "Are you sure you want to delete the student database? This action cannot be undone."):
+            self.attendance_manager.delete_database()
+            # Remove all class tabs
+            for class_name in list(self.class_widgets.keys()):
+                self.notebook.forget(self.class_widgets[class_name]['present_frame'].master.master)
+                del self.class_widgets[class_name]
+            messagebox.showinfo("Database Deleted", "The student database has been deleted.")
+            logging.info("Student database deleted.")
+        else:
+            logging.info("Database deletion canceled by user.")
 
     def handle_scan_results(self, found_devices):
         self.scan_count += 1
@@ -183,6 +252,10 @@ class AttendanceApp:
 
         self.attendance_manager.update_attendance(self.found_devices)
         self.refresh_gui()
+
+    def refresh_gui(self):
+        for class_name in list(self.class_widgets.keys()):
+            self.update_student_lists(class_name)
 
     def update_student_lists(self, class_name):
         class_widgets = self.class_widgets[class_name]
@@ -218,7 +291,7 @@ class AttendanceApp:
         info_frame = ttk.Frame(frame)
         info_frame.grid(row=0, column=1, sticky='w')
 
-        name_label = ttk.Label(info_frame, text=student['name'], font=('Arial', 12, 'bold'))
+        name_label = ttk.Label(info_frame, text=student.get('name', ''), font=('Arial', 12, 'bold'))
         name_label.pack(anchor='w')
 
         assigned_macs = self.attendance_manager.get_assigned_macs_for_student(class_name, student_id)
@@ -233,10 +306,10 @@ class AttendanceApp:
 
         if present:
             action_button = ttk.Button(frame, text="Mark Absent",
-                                    command=lambda: self.attendance_manager.mark_student_absent(class_name, student_id))
+                                       command=lambda: self.mark_student_absent(class_name, student_id))
         else:
             action_button = ttk.Button(frame, text="Mark Present",
-                                    command=lambda: self.attendance_manager.mark_student_present(class_name, student_id))
+                                       command=lambda: self.mark_student_present(class_name, student_id))
         action_button.grid(row=0, column=2, sticky='e', padx=5, pady=5)
 
         device_var = tk.StringVar()
@@ -252,21 +325,13 @@ class AttendanceApp:
                                        class_name, student_id, device_var.get(), device_info_map))
         assign_button.grid(row=1, column=2, padx=5, pady=5, sticky='w')
 
-    def import_html_action(self):
-        """Handle the action triggered by the 'Import HTML' button."""
-        updated_classes = self.importion.import_html_action()
-        for class_name in updated_classes:
-            if class_name not in self.class_widgets:
-                self.create_class_tab(class_name)
-            self.update_student_lists(class_name)
-
     def get_device_options(self):
         device_options = []
         device_info_map = {}
         for addr, device_info in self.found_devices.items():
             addr_short = addr[-4:]
             scans_since_first_seen = self.scan_count - device_info.get('first_seen_scan', self.scan_count) + 1
-            display_text = f"{device_info['name'] or 'Unknown'} ({addr_short}) - Scans: {scans_since_first_seen}"
+            display_text = f"{device_info.get('name') or 'Unknown'} ({addr_short}) - Scans: {scans_since_first_seen}"
 
             prev_class_name, prev_student_id = self.attendance_manager.get_student_by_mac(addr)
             if prev_student_id:
@@ -305,21 +370,17 @@ class AttendanceApp:
         prev_class_name, prev_student_id = self.attendance_manager.get_student_by_mac(full_addr)
         if prev_student_id:
             self.attendance_manager.remove_mac_from_student(prev_class_name, prev_student_id, full_addr)
-            log_message(f"Removed device {full_addr} from student {prev_student_id} in class {prev_class_name}.")
-            self.attendance_manager.mark_student_absent(prev_class_name, prev_student_id)
-            log_message(f"Marked {prev_student_id} as absent in class {prev_class_name} due to device reassignment.")
+            logging.info(f"Removed device {full_addr} from student {prev_student_id} in class {prev_class_name}.")
+            self.mark_student_absent(prev_class_name, prev_student_id)
+            logging.info(f"Marked {prev_student_id} as absent in class {prev_class_name} due to device reassignment.")
             self.update_student_lists(prev_class_name)
 
         self.attendance_manager.assign_device_to_student(class_name, student_id, full_addr)
-        log_message(f"Assigned device {full_addr} to student {student_id} in class {class_name}.")
-        self.attendance_manager.mark_student_present(class_name, student_id)
-        log_message(f"Marked {student_id} as present in class {class_name} due to device assignment.")
+        logging.info(f"Assigned device {full_addr} to student {student_id} in class {class_name}.")
+        self.mark_student_present(class_name, student_id)
+        logging.info(f"Marked {student_id} as present in class {class_name} due to device assignment.")
 
         self.update_student_lists(class_name)
-
-    def refresh_gui(self):
-        for class_name in list(self.class_widgets.keys()):
-            self.update_student_lists(class_name)
 
     def get_student_image(self, student, image_label):
         """Retrieve and process the student's image asynchronously."""
@@ -328,18 +389,20 @@ class AttendanceApp:
             if photo_url:
                 try:
                     response = requests.get(photo_url, timeout=5)
+                    response.raise_for_status()
                     image_data = response.content
                     image = Image.open(BytesIO(image_data))
                     image = image.resize((100, 100), Image.LANCZOS)
                     photo = ImageTk.PhotoImage(image)
                     self.master.after(0, lambda: image_label.config(image=photo))
-                    image_label.image = photo
-                except Exception as e:
-                    log_message(f"Failed to load image for student {student['student_id']}: {e}", "error")
+                    image_label.image = photo  # Prevent garbage collection
+                    logging.info(f"Loaded image for student '{student.get('student_id', 'Unknown')}'.")
+                except (requests.exceptions.RequestException, IOError) as e:
+                    logging.error(f"Failed to load image for student {student.get('student_id', 'Unknown')}: {e}")
                     self.master.after(0, lambda: image_label.config(image=self.get_placeholder_image()))
             else:
                 self.master.after(0, lambda: image_label.config(image=self.get_placeholder_image()))
-        
+
         threading.Thread(target=fetch_image, daemon=True).start()
 
     def get_placeholder_image(self):
@@ -349,20 +412,6 @@ class AttendanceApp:
             image = Image.new('RGB', (100, 100), color='gray')
             self.placeholder_image = ImageTk.PhotoImage(image)
         return self.placeholder_image
-
-    def add_class_code(self, new_code, class_codes_display):
-        """Add a new class code to the list of valid class codes."""
-        new_code = new_code.strip().upper()
-        if new_code and new_code.isalpha():
-            if new_code not in self.attendance_manager.valid_class_codes:
-                self.attendance_manager.valid_class_codes.append(new_code)
-                class_codes_display.config(text=", ".join(self.attendance_manager.valid_class_codes))
-                messagebox.showinfo("Success", f"Added new class code: {new_code}")
-                log_message(f"Added new class code: {new_code}")
-            else:
-                messagebox.showwarning("Duplicate Code", f"The class code {new_code} already exists.")
-        else:
-            messagebox.showerror("Invalid Code", "Please enter a valid class code consisting of alphabetic characters only.")
 
     def parse_rssi_value(self, rssi_string):
         """Parse the RSSI threshold string from the GUI and return an integer value."""
@@ -375,6 +424,7 @@ class AttendanceApp:
 
     def add_student_dialog(self, class_name):
         """Open a dialog to add a new student with optional Student ID and Photo URL."""
+        logging.info(f"Opening Add Student dialog for class '{class_name}'.")
         dialog = tk.Toplevel(self.master)
         dialog.title(f"Add Student to {class_name}")
         dialog.geometry("400x250")
@@ -395,17 +445,20 @@ class AttendanceApp:
 
         # Buttons
         def on_submit():
+            logging.info("Submit button in Add Student dialog clicked.")
             name = name_entry.get().strip()
             student_id = id_entry.get().strip() or None
             photo_url = photo_entry.get().strip() or None
 
             if not name:
                 messagebox.showerror("Input Error", "Student name is required.")
+                logging.warning("Add Student dialog submission failed: Missing student name.")
                 return
 
             # Optional: Validate Photo URL if provided
-            if photo_url and not utils.is_valid_url(photo_url):
+            if photo_url and not is_valid_url(photo_url):
                 if not messagebox.askyesno("Invalid URL", "The provided Photo URL is invalid. Do you want to proceed without it?"):
+                    logging.info("Add Student dialog submission canceled due to invalid Photo URL.")
                     return
                 photo_url = None
 
@@ -421,11 +474,11 @@ class AttendanceApp:
                 self.attendance_manager.add_student_to_class(class_name, student)
                 self.update_student_lists(class_name)
                 messagebox.showinfo("Success", f"Student '{name}' added to class '{class_name}'.")
-                log_message(f"Added student '{name}' to class '{class_name}'.")
+                logging.info(f"Added student '{name}' to class '{class_name}'.")
                 dialog.destroy()
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to add student: {e}")
-                log_message(f"Failed to add student '{name}' to class '{class_name}': {e}", "error")
+                logging.error(f"Failed to add student '{name}' to class '{class_name}': {e}")
 
         submit_button = ttk.Button(dialog, text="Add Student", command=on_submit)
         submit_button.grid(row=3, column=0, columnspan=2, pady=20)
@@ -435,3 +488,54 @@ class AttendanceApp:
         x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
         y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
         dialog.geometry(f"+{x}+{y}")
+
+    def add_class_code(self, new_code, valid_class_codes_var):
+        """Add a new class code to the list of valid class codes."""
+        new_code = new_code.strip().upper()
+        if new_code and new_code.isalpha():
+            if new_code not in self.attendance_manager.valid_class_codes:
+                self.attendance_manager.valid_class_codes.append(new_code)
+                valid_class_codes_var.set(", ".join(self.attendance_manager.valid_class_codes))
+                messagebox.showinfo("Success", f"Added new class code: {new_code}")
+                logging.info(f"Added new class code: {new_code}")
+            else:
+                messagebox.showwarning("Duplicate Code", f"The class code {new_code} already exists.")
+        else:
+            messagebox.showerror("Invalid Code", "Please enter a valid class code consisting of alphabetic characters only.")
+
+    def add_class(self, class_name):
+        """Add a new class and create its tab."""
+        class_name = class_name.strip()
+        if class_name:
+            if class_name not in self.attendance_manager.classes:
+                self.attendance_manager.add_class(class_name)
+                self.create_class_tab(class_name)
+                messagebox.showinfo("Class Added", f"Class '{class_name}' has been added.")
+                logging.info(f"Class '{class_name}' has been added.")
+            else:
+                messagebox.showwarning("Duplicate Class", f"The class '{class_name}' already exists.")
+        else:
+            messagebox.showwarning("Input Error", "Class name cannot be empty.")
+            # Clear the input field and set focus back to it
+            class_entry = self.settings_widgets['class_entry']
+            class_entry.delete(0, tk.END)
+            class_entry.focus_set()
+
+    def mark_student_present(self, class_name, student_id):
+        """Mark a student as present and update the GUI."""
+        self.attendance_manager.mark_student_present(class_name, student_id)
+        logging.info(f"Manually marked student '{student_id}' as present in class '{class_name}'.")
+        self.update_student_lists(class_name)
+
+    def mark_student_absent(self, class_name, student_id):
+        """Mark a student as absent and update the GUI."""
+        self.attendance_manager.mark_student_absent(class_name, student_id)
+        logging.info(f"Manually marked student '{student_id}' as absent in class '{class_name}'.")
+        self.update_student_lists(class_name)
+
+    def on_closing(self):
+        """Handle closing the application."""
+        if messagebox.askokcancel("Quit", "Do you really want to quit?"):
+            if self.scanning:
+                self.scanner.stop_scanning()
+            self.master.destroy()

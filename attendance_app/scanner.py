@@ -3,8 +3,8 @@
 import asyncio
 import threading
 import time
-from bleak import BleakScanner  # type: ignore
-from utils import log_message
+import logging
+from bleak import BleakScanner  # Ensure Bleak is installed
 
 class Scanner:
     def __init__(self, callback=None, rssi_threshold=-70, scan_interval=10):
@@ -23,29 +23,37 @@ class Scanner:
             self.loop = asyncio.new_event_loop()
             self.thread = threading.Thread(target=self._run_loop, daemon=True)
             self.thread.start()
-            log_message("Started Bluetooth scanning.", "info")
+            logging.info("Started Bluetooth scanning.")
+        else:
+            logging.warning("Scanning is already active.")
 
     def _run_loop(self):
         asyncio.set_event_loop(self.loop)
         try:
             self.loop.run_until_complete(self.scan_devices())
         except Exception as e:
-            log_message(f"Asyncio loop encountered an error: {e}", "error")
+            logging.error(f"Asyncio loop encountered an error: {e}")
         finally:
             self.loop.close()
 
     def stop_scanning(self):
         """Stop scanning for Bluetooth devices."""
         if not self.scanning:
-            return  # Already stopped
+            logging.warning("Scanning is already stopped.")
+            return
         self.scanning = False
         if self.loop and self.thread.is_alive():
-            self.loop.call_soon_threadsafe(self.loop.stop)
-            self.thread.join(timeout=5)  # Wait for the thread to finish
-            if self.thread.is_alive():
-                log_message("Scanning thread did not terminate gracefully.", "warning")
-            else:
-                log_message("Scanning stopped gracefully.", "info")
+            try:
+                self.loop.call_soon_threadsafe(self.loop.stop)
+                self.thread.join(timeout=5)  # Wait for the thread to finish
+                if self.thread.is_alive():
+                    logging.warning("Scanning thread did not terminate gracefully.")
+                else:
+                    logging.info("Scanning stopped gracefully.")
+            except Exception as e:
+                logging.error(f"Error stopping scanning: {e}")
+        else:
+            logging.warning("No active scanning thread found.")
 
     async def scan_devices(self):
         """Scan for Bluetooth devices and invoke the callback with results."""
@@ -62,15 +70,16 @@ class Scanner:
                     scan_interval = self.scan_interval
 
                 for device in nearby_devices:
-                    rssi = device.rssi  
+                    rssi = device.rssi
 
                     if rssi >= rssi_threshold:
-                        found_devices[device.address.upper()] = {
+                        addr_upper = device.address.upper()
+                        found_devices[addr_upper] = {
                             'name': device.name,
                             'rssi': rssi,
                             'timestamp': current_time
                         }
-                        log_message(f"Found device: {device.name} ({device.address}) with RSSI: {rssi}", "info")
+                        logging.info(f"Found device: {device.name} ({device.address}) with RSSI: {rssi}")
 
                 # Compare with previous_found_devices to detect changes
                 if found_devices != previous_found_devices:
@@ -78,8 +87,7 @@ class Scanner:
                     previous_found_devices = found_devices.copy()
 
             except Exception as e:
-                log_message(f"Error during scanning: {e}", "error")
-                # Decide whether to continue or halt scanning
+                logging.error(f"Error during scanning: {e}")
             finally:
                 with self.lock:
                     scan_interval = self.scan_interval
@@ -94,7 +102,7 @@ class Scanner:
         with self.lock:
             old_threshold = self.rssi_threshold
             self.rssi_threshold = new_threshold
-        log_message(f"Updated RSSI threshold from {old_threshold} dBm to {new_threshold} dBm.", "info")
+        logging.info(f"Updated RSSI threshold from {old_threshold} dBm to {new_threshold} dBm.")
 
     def update_scan_interval(self, new_interval):
         try:
@@ -102,10 +110,10 @@ class Scanner:
             if new_interval < 1:
                 raise ValueError("Scan interval must be at least 1 second.")
         except ValueError as ve:
-            log_message(f"Invalid scan interval update attempted: {ve}", "error")
+            logging.error(f"Invalid scan interval update attempted: {ve}")
             return
 
         with self.lock:
             old_interval = self.scan_interval
             self.scan_interval = new_interval
-        log_message(f"Updated scan interval from {old_interval} seconds to {new_interval} seconds.", "info")
+        logging.info(f"Updated scan interval from {old_interval} seconds to {new_interval} seconds.")

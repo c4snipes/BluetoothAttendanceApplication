@@ -1,13 +1,39 @@
-# widgets.py
-
 import tkinter as tk
 from tkinter import ttk
 import platform
-from tkinter import messagebox
-from utils import log_message
-from widgets import ToolTip  # Ensure this is correctly imported or defined in the same file
-import re
 
+class ToolTip:
+    """
+    Create a tooltip for a given widget.
+    """
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tooltip_window = None
+        self.widget.bind("<Enter>", self.show_tooltip)
+        self.widget.bind("<Leave>", self.hide_tooltip)
+        self.widget.bind("<Destroy>", self.hide_tooltip)  # Ensure tooltip is hidden
+
+    def show_tooltip(self, event=None):
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 10
+        self.tooltip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)  # Remove window decorations
+        tw.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(
+            tw,
+            text=self.text,
+            background="#FFFFE0",  # Light yellow background
+            relief="solid",
+            borderwidth=1,
+            font=("Arial", 10),
+        )
+        label.pack()
+
+    def hide_tooltip(self, event=None):
+        if self.tooltip_window:
+            self.tooltip_window.destroy()
+            self.tooltip_window = None
 
 def create_notebook(master):
     """
@@ -20,16 +46,13 @@ def create_notebook(master):
     notebook.pack(fill="both", expand=True)
     return notebook
 
-
-def create_settings_tab(notebook, valid_class_codes, attendance_manager, disseminate):
+def create_settings_tab(notebook, valid_class_codes):
     """
     Create the Settings tab within the Notebook.
 
     :param notebook: The ttk.Notebook instance.
     :param valid_class_codes: List of valid class codes.
-    :param attendance_manager: Instance of AttendanceManager.
-    :param disseminate: Instance of Disseminate for export functions.
-    :return: Tuple of widgets for further configuration.
+    :return: A dictionary containing widgets that need to be connected to actions.
     """
     settings_frame = ttk.Frame(notebook)
     notebook.add(settings_frame, text="Settings")
@@ -46,8 +69,7 @@ def create_settings_tab(notebook, valid_class_codes, attendance_manager, dissemi
     delete_label = ttk.Label(settings_main_frame, text="Delete Student Database")
     delete_label.grid(row=row_counter, column=0, sticky="w", pady=5)
 
-    delete_button = ttk.Button(settings_main_frame, text="Delete Database",
-                               command=lambda: delete_database(attendance_manager))
+    delete_button = ttk.Button(settings_main_frame, text="Delete Database")
     delete_button.grid(row=row_counter, column=1, sticky="w", pady=5)
 
     row_counter += 1
@@ -64,9 +86,6 @@ def create_settings_tab(notebook, valid_class_codes, attendance_manager, dissemi
     current_theme = style.theme_use()
     theme_combo.set(current_theme)
 
-    # Bind theme change
-    theme_combo.bind('<<ComboboxSelected>>', lambda event: change_theme(theme_combo.get()))
-
     row_counter += 1
 
     # Class Management Section
@@ -76,9 +95,7 @@ def create_settings_tab(notebook, valid_class_codes, attendance_manager, dissemi
     class_entry = ttk.Entry(settings_main_frame)
     class_entry.grid(row=row_counter, column=1, sticky="ew", pady=5)
 
-    add_class_button = ttk.Button(settings_main_frame, text="Add Class",
-                                  command=lambda: add_class(attendance_manager, class_entry.get(),
-                                                           class_entry, class_codes_display, notebook, disseminate))
+    add_class_button = ttk.Button(settings_main_frame, text="Add Class")
     add_class_button.grid(row=row_counter, column=2, sticky="w", pady=5)
 
     row_counter += 1
@@ -87,10 +104,11 @@ def create_settings_tab(notebook, valid_class_codes, attendance_manager, dissemi
     class_codes_label = ttk.Label(settings_main_frame, text="Current Class Codes:")
     class_codes_label.grid(row=row_counter, column=0, sticky="w", pady=5)
 
-    # Only show valid class codes (ensure only valid ones are registered)
+    # Use StringVar for dynamic updates
     valid_class_codes_display = [code for code in valid_class_codes if code.isalpha()]
+    valid_class_codes_var = tk.StringVar(value=", ".join(valid_class_codes_display))
     class_codes_display = ttk.Label(
-        settings_main_frame, text=", ".join(valid_class_codes_display)
+        settings_main_frame, textvariable=valid_class_codes_var
     )
     class_codes_display.grid(row=row_counter, column=1, sticky="w", pady=5)
 
@@ -116,9 +134,7 @@ def create_settings_tab(notebook, valid_class_codes, attendance_manager, dissemi
     new_code_entry = ttk.Entry(settings_main_frame)
     new_code_entry.grid(row=row_counter, column=1, sticky="ew", pady=5)
 
-    add_code_button = ttk.Button(settings_main_frame, text="Add Code",
-                                 command=lambda: add_class_code(attendance_manager, new_code_entry.get(),
-                                                              class_codes_display))
+    add_code_button = ttk.Button(settings_main_frame, text="Add Code")
     add_code_button.grid(row=row_counter, column=2, sticky="w", pady=5)
 
     row_counter += 1
@@ -127,8 +143,7 @@ def create_settings_tab(notebook, valid_class_codes, attendance_manager, dissemi
     import_html_label = ttk.Label(settings_main_frame, text="Import Classes from HTML")
     import_html_label.grid(row=row_counter, column=0, sticky="w", pady=5)
 
-    import_html_button = ttk.Button(settings_main_frame, text="Import HTML",
-                                    command=lambda: import_html(attendance_manager, disseminate))
+    import_html_button = ttk.Button(settings_main_frame, text="Import HTML")
     import_html_button.grid(row=row_counter, column=1, sticky="w", pady=5)
 
     row_counter += 1
@@ -139,22 +154,21 @@ def create_settings_tab(notebook, valid_class_codes, attendance_manager, dissemi
     )
     export_all_label.grid(row=row_counter, column=0, sticky="w", pady=5)
 
-    export_all_button = ttk.Button(settings_main_frame, text="Export All",
-                                   command=lambda: disseminate.export_all_classes())
+    export_all_button = ttk.Button(settings_main_frame, text="Export All")
     export_all_button.grid(row=row_counter, column=1, sticky="w", pady=5)
 
-    return (
-        delete_button,
-        theme_combo,
-        add_class_button,
-        class_entry,
-        add_code_button,
-        new_code_entry,
-        class_codes_display,
-        import_html_button,
-        export_all_button,
-    )
-
+    # Return the widgets as a dictionary
+    return {
+        'delete_button': delete_button,
+        'theme_combo': theme_combo,
+        'add_class_button': add_class_button,
+        'class_entry': class_entry,
+        'add_code_button': add_code_button,
+        'new_code_entry': new_code_entry,
+        'valid_class_codes_var': valid_class_codes_var,
+        'import_html_button': import_html_button,
+        'export_all_button': export_all_button,
+    }
 
 def create_class_tab_widgets_with_photos(parent_frame):
     """
@@ -175,15 +189,9 @@ def create_class_tab_widgets_with_photos(parent_frame):
     button_frame = ttk.Frame(main_frame)
     button_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
 
-    button_frame.columnconfigure(0, weight=0)
-    button_frame.columnconfigure(1, weight=0)
-    button_frame.columnconfigure(2, weight=0)
-    button_frame.columnconfigure(3, weight=0)
-    button_frame.columnconfigure(4, weight=0)
-    button_frame.columnconfigure(5, weight=0)
-    button_frame.columnconfigure(6, weight=0)
-    button_frame.columnconfigure(7, weight=0)
-    button_frame.columnconfigure(8, weight=1)
+    # Configure columns to expand appropriately
+    for i in range(9):
+        button_frame.columnconfigure(i, weight=1 if i == 8 else 0)
     button_frame.rowconfigure(0, weight=0)
 
     # Place buttons using grid
@@ -193,8 +201,8 @@ def create_class_tab_widgets_with_photos(parent_frame):
     add_student_button = ttk.Button(button_frame, text="Add Student")
     add_student_button.grid(row=0, column=1, padx=5, sticky="w")
 
-    stop_scan_button = ttk.Button(button_frame, text="Stop Scanning")
-    stop_scan_button.grid(row=0, column=2, padx=5, sticky="w")
+    scan_toggle_button = ttk.Button(button_frame, text="Start Scanning")
+    scan_toggle_button.grid(row=0, column=2, padx=5, sticky="w")
 
     export_button = ttk.Button(button_frame, text="Export Attendance")
     export_button.grid(row=0, column=3, padx=5, sticky="w")
@@ -267,35 +275,25 @@ def create_class_tab_widgets_with_photos(parent_frame):
     absent_label = ttk.Label(absent_frame_container, text="Absent")
     absent_label.grid(row=0, column=0, pady=5)
 
-    log_frame = ttk.Frame(main_frame)
-    log_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=5)
-    log_frame.columnconfigure(0, weight=1)
-    log_frame.rowconfigure(0, weight=1)
-
-    log_text = tk.Text(log_frame, height=5, state="disabled", wrap="word")
-    log_text.grid(row=0, column=0, sticky="nsew")
-
     return (
         button_frame,
         present_frame_container,
         absent_frame_container,
         import_button,
         add_student_button,
-        stop_scan_button,
-        log_text,
+        scan_toggle_button,
         interval_var,
         rssi_var,
         quit_button,
         export_button,
     )
 
-
 def create_scrollable_frame(parent):
     """
     Create a scrollable frame within a given parent frame.
 
     :param parent: The parent Tkinter widget.
-    :return: The scrollable frame.
+    :return: The scrollable frame (ttk.Frame).
     """
     canvas = tk.Canvas(parent)
     v_scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
@@ -317,15 +315,23 @@ def create_scrollable_frame(parent):
 
     # Bind scroll events
     def _on_mousewheel(event):
-        if platform.system() == "Darwin":
-            canvas.yview_scroll(int(-1 * (event.delta)), "units")
-        else:
+        if platform.system() == "Windows":
             canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        elif platform.system() == "Darwin":
+            canvas.yview_scroll(int(-1 * event.delta), "units")
+        else:  # Linux and other platforms
+            if event.num == 4:
+                canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                canvas.yview_scroll(1, "units")
 
+    # Windows and macOS
     canvas.bind_all("<MouseWheel>", _on_mousewheel)
+    # Linux
+    canvas.bind_all("<Button-4>", _on_mousewheel)
+    canvas.bind_all("<Button-5>", _on_mousewheel)
 
     return scrollable_frame
-
 
 def change_theme(theme_name):
     """
@@ -335,129 +341,4 @@ def change_theme(theme_name):
     """
     style = ttk.Style()
     style.theme_use(theme_name)
-
-
-def delete_database(attendance_manager):
-    """
-    Handle the deletion of the student database with user confirmation.
-
-    :param attendance_manager: Instance of AttendanceManager.
-    """
-    if messagebox.askyesno("Confirm Deletion", "Are you sure you want to delete the student database? This action cannot be undone."):
-        attendance_manager.delete_database()
-        messagebox.showinfo("Database Deleted", "Student database has been deleted.")
-    else:
-        log_message("Database deletion canceled by user.", "info")
-
-
-def add_class(attendance_manager, class_name, class_entry, class_codes_display, notebook, disseminate):
-    """
-    Add a new class to the AttendanceManager and create its corresponding tab.
-
-    :param attendance_manager: Instance of AttendanceManager.
-    :param class_name: Name of the class to add.
-    :param class_entry: Tkinter Entry widget for class name input.
-    :param class_codes_display: Tkinter Label widget displaying current class codes.
-    :param notebook: ttk.Notebook instance.
-    :param disseminate: Instance of Disseminate for export functions.
-    """
-    class_name = class_name.strip()
-    if class_name:
-        attendance_manager.add_class(class_name)
-        create_class_tab(notebook, class_name, attendance_manager, disseminate)
-        class_entry.delete(0, tk.END)
-        messagebox.showinfo("Class Added", f"Class '{class_name}' has been added.")
-    else:
-        messagebox.showwarning("Input Error", "Class name cannot be empty.")
-
-
-def add_class_code(attendance_manager, new_code, class_codes_display):
-    """
-    Add a new class code for HTML parsing.
-
-    :param attendance_manager: Instance of AttendanceManager.
-    :param new_code: The new class code to add.
-    :param class_codes_display: Tkinter Label widget displaying current class codes.
-    """
-    new_code = new_code.strip().upper()
-    if new_code and new_code.isalpha():
-        if new_code not in attendance_manager.valid_class_codes:
-            attendance_manager.valid_class_codes.append(new_code)
-            class_codes_display.config(text=", ".join(attendance_manager.valid_class_codes))
-            messagebox.showinfo("Success", f"Added new class code: {new_code}")
-            log_message(f"Added new class code: {new_code}")
-        else:
-            messagebox.showwarning("Duplicate Code", f"The class code '{new_code}' already exists.")
-    else:
-        messagebox.showerror("Invalid Code", "Please enter a valid class code consisting of alphabetic characters only.")
-
-
-def import_html(attendance_manager, disseminate):
-    """
-    Handle the import of students from an HTML file.
-
-    :param attendance_manager: Instance of AttendanceManager.
-    :param disseminate: Instance of Disseminate for export functions.
-    """
-    from import_att import importApp  # Ensure importApp is correctly imported
-    importer = importApp(attendance_manager)
-    imported_classes = importer.import_html_action()
-    if imported_classes:
-        for class_name in imported_classes:
-            if class_name not in [ttk.Notebook.tab(i, "text") for i in range(ttk.Notebook.index("end"))]:
-                create_class_tab(disseminate.master.notebook, class_name, attendance_manager, disseminate)
-            # Update the GUI lists for the class
-            # This assumes you have a method to refresh the GUI, adjust as necessary
-            # For example:
-            # update_student_lists(class_name)
-        messagebox.showinfo("Import Success", "Students imported successfully from HTML.")
-    else:
-        messagebox.showwarning("Import Warning", "No classes were imported from the HTML file.")
-
-
-def create_class_tab(notebook, class_name, attendance_manager, disseminate):
-    """
-    Create a new tab for the specified class.
-
-    :param notebook: ttk.Notebook instance.
-    :param class_name: Name of the class.
-    :param attendance_manager: Instance of AttendanceManager.
-    :param disseminate: Instance of Disseminate for export functions.
-    """
-    from gui import AttendanceApp  # Ensure this is correctly imported if necessary
-    # Here, it's assumed that the AttendanceApp has a method to create class tabs.
-    # This function can be adjusted based on the actual implementation of the main application.
-    pass  # Implement based on main application structure
-
-
-class ToolTip:
-    """
-    Create a tooltip for a given widget.
-    """
-    def __init__(self, widget, text):
-        self.widget = widget
-        self.text = text
-        self.tooltip_window = None
-        self.widget.bind("<Enter>", self.show_tooltip)
-        self.widget.bind("<Leave>", self.hide_tooltip)
-
-    def show_tooltip(self, event=None):
-        x = self.widget.winfo_rootx() + 20
-        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 10
-        self.tooltip_window = tw = tk.Toplevel(self.widget)
-        tw.wm_overrideredirect(True)  # Remove window decorations
-        tw.wm_geometry(f"+{x}+{y}")
-        label = tk.Label(
-            tw,
-            text=self.text,
-            background="yellow",
-            relief="solid",
-            borderwidth=1,
-            font=("Arial", 10),
-        )
-        label.pack()
-
-    def hide_tooltip(self, event=None):
-        if self.tooltip_window:
-            self.tooltip_window.destroy()
-            self.tooltip_window = None
+    # Reconfigure custom styles if necessary
