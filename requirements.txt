@@ -12,3 +12,14 @@ pytest
 PyQt5
 ntk
 pyperclip
+snakeviz
+pyprof2calltree
+pyinstrument
+zwerks
+flask
+django
+sqlalchemy
+jupyter
+notebook
+scipy
+seaborn

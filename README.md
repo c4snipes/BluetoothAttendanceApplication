@@ -29,3 +29,20 @@ The **Bluetooth-Based Attendance Application** brings ease and automation to the
 ```bash
 git clone https://github.com/c4snipes/BluetoothAttendanceApplication.git
 cd BluetoothAttendanceApplication
+```
+
+### Install Dependencies
+
+Navigate to the project directory and install the required dependencies using pip:
+
+```bash
+pip install -r requirements.txt
+```
+
+### Run the Application
+
+After installing the dependencies, you can run the application using:
+
+```bash
+python main.py
+```
