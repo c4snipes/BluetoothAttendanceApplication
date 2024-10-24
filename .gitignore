@@ -110,3 +110,23 @@ __pypackages__/
 # Local .env files
 .env.local
 .env.*.local
+
+# Local .pkl, .html files, .html files, and .log files
+*.pkl
+.pkl.local
+.pkl
+.htmlcov.local
+.html
+*.html
+.logs
+.log
+*.log
+.pdf
+
+# Local .cache files
+.__pycached__
+.pytest_cached  
+editorconfig.pytest_cached
+fileconfig.pytest_cached
+cacheconfig.pytest_cached
+cacheconfig.pytest_cached   
