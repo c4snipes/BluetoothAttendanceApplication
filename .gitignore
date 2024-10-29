@@ -130,3 +130,5 @@ editorconfig.pytest_cached
 fileconfig.pytest_cached
 cacheconfig.pytest_cached
 cacheconfig.pytest_cached   
+
+./image_cache
