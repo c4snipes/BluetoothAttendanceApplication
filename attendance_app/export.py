@@ -5,8 +5,6 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import csv
 import os
-from attendance import AttendanceManager
-
 
 class Disseminate:
     def __init__(self, master, attendance_manager):
@@ -90,24 +88,23 @@ class Disseminate:
 
                 with open(file_path, "w", newline='', encoding='utf-8') as csvfile:
                     writer = csv.writer(csvfile)
-                    writer.writerow(selected_fields)  # Write selected fields as headers
+                    writer.writerow(selected_fields or [])  # Write selected fields as headers
 
                     # Gather and write student data
-                    class_data = self.attendance_manager.classes.get(class_name, {})
-                    students = class_data.get("students", {})
+                    students = self.attendance_manager.get_all_students(class_name)
                     for student_id, student in students.items():
                         row = []
-                        if "Student ID" in selected_fields:
+                        if selected_fields and "Student ID" in selected_fields:
                             row.append(student_id)
-                        if "Name" in selected_fields:
+                        if selected_fields and "Name" in selected_fields:
                             row.append(student.get("name", ""))
-                        if "MAC Address" in selected_fields:
+                        if selected_fields and "MAC Address" in selected_fields:
                             macs = self.attendance_manager.get_assigned_macs_for_student(class_name, student_id)
                             row.append(', '.join(macs) if macs else "Unassigned")
-                        if "Attendance Count" in selected_fields:
+                        if selected_fields and "Attendance Count" in selected_fields:
                             count = self.attendance_manager.get_attendance_count(class_name, student_id)
                             row.append(count)
-                        if "Last Seen Time" in selected_fields:
+                        if selected_fields and "Last Seen Time" in selected_fields:
                             timestamp = self.attendance_manager.get_attendance_timestamp(class_name, student_id)
                             row.append(timestamp.strftime('%Y-%m-%d %H:%M:%S') if timestamp else "Never")
                         writer.writerow(row)
@@ -132,10 +129,11 @@ class Disseminate:
         """
         Prompt the user to select which fields to include in the export.
 
-        :return: List of selected fields.
+        :return: A list of selected fields (e.g. ["Student ID", "Name", ...]).
         """
         selected_fields = []
 
+        # Create a new Toplevel window
         export_popup = tk.Toplevel(self.master)
         export_popup.title("Select Fields to Export")
         export_popup.geometry("300x250")
@@ -145,10 +143,31 @@ class Disseminate:
         # List of exportable fields
         fields = ["Student ID", "Name", "MAC Address", "Attendance Count", "Last Seen Time"]
 
+        # Dictionary to store Checkbutton variables
         checkboxes = {}
 
+        # A frame to place the checkboxes in
+        checkbox_frame = ttk.Frame(export_popup)
+        checkbox_frame.pack(pady=10, padx=10, anchor='w')
+
+        # Create checkboxes for each field, default them all to True
+        for field in fields:
+            var = tk.BooleanVar(value=True)
+            cb = ttk.Checkbutton(checkbox_frame, text=field, variable=var)
+            cb.pack(anchor='w', pady=2)
+            checkboxes[field] = var
+
+        # Button frame for "Export" and "Cancel" buttons
+        button_frame = ttk.Frame(export_popup)
+        button_frame.pack(pady=10)
+
+        # Define the callbacks (on_export_confirm & on_export_cancel)
+
         def on_export_confirm():
-            selected = [field for field, var in checkboxes.items() if var.get()]
+            """
+            Gather selected fields and close the dialog.
+            """
+            selected = [f for f, var in checkboxes.items() if var.get()]
             if selected:
                 selected_fields.extend(selected)
                 export_popup.destroy()
@@ -159,45 +178,39 @@ class Disseminate:
         def on_export_cancel():
             export_popup.destroy()
 
-        # Frame for checkboxes
-        checkbox_frame = ttk.Frame(export_popup)
-        checkbox_frame.pack(pady=10, padx=10, anchor='w')
+        # 1) Define the Export button FIRST
+        export_btn = ttk.Button(button_frame, text="Export", command=on_export_confirm)
+        export_btn.grid(row=0, column=0, padx=5)
 
-        for field in fields:
-            var = tk.BooleanVar(value=True)  # Default all fields selected
-            checkbox = ttk.Checkbutton(checkbox_frame, text=field, variable=var)
-            checkbox.pack(anchor='w', pady=2)
-            checkboxes[field] = var
+        # 2) Define the Cancel button
+        cancel_btn = ttk.Button(button_frame, text="Cancel", command=on_export_cancel)
+        cancel_btn.grid(row=0, column=1, padx=5)
 
-        # Disable Export button initially if no fields are selected
+        # 3) Now define the function that references `export_btn`
         def update_export_button(*args):
+            """
+            Enable or disable the "Export" button based on whether at least
+            one checkbox is selected.
+            """
             if any(var.get() for var in checkboxes.values()):
                 export_btn.config(state='normal')
             else:
                 export_btn.config(state='disabled')
 
+        # Bind each checkbox variable to update_export_button on change
         for var in checkboxes.values():
             var.trace_add('write', update_export_button)
 
-        # Initially enable the Export button
+        # Manually call once so it sets the correct initial state
         update_export_button()
 
-        # Buttons
-        button_frame = ttk.Frame(export_popup)
-        button_frame.pack(pady=10)
-
-        export_btn = ttk.Button(button_frame, text="Export", command=on_export_confirm)
-        export_btn.grid(row=0, column=0, padx=5)
-
-        cancel_btn = ttk.Button(button_frame, text="Cancel", command=on_export_cancel)
-        cancel_btn.grid(row=0, column=1, padx=5)
-
-        # Center the popup on the screen
+        # Center the popup on screen
         export_popup.update_idletasks()
         x = (self.master.winfo_screenwidth() // 2) - (export_popup.winfo_width() // 2)
         y = (self.master.winfo_screenheight() // 2) - (export_popup.winfo_height() // 2)
         export_popup.geometry(f"+{x}+{y}")
 
+        # Wait until the popup is closed
         self.master.wait_window(export_popup)
 
         return selected_fields

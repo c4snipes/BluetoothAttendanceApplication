@@ -1,0 +1,12 @@
+{
+"python.analysis.extraPaths": [
+    "./attendance_app"
+],
+"python.analysis.typeCheckingMode": "basic",
+"makefile.makefilePath": ".Makefile",
+"python.testing.pytestArgs": [
+    "test"
+],
+"python.testing.unittestEnabled": false,
+"python.testing.pytestEnabled": true
+}

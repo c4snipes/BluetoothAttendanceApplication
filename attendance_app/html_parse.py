@@ -80,7 +80,7 @@ def is_valid_url(url):
     :return: True if the URL is valid and accessible, False otherwise.
     """
     try:
-        response = requests.get(url, allow_redirects=True, stream=True, timeout=5)
+        response = requests.get(url, allow_redirects=True, timeout=5)
         return response.status_code == 200
     except Exception as e:
         logging.error(f"Error validating URL '{url}': {e}")

@@ -1,3 +1,5 @@
+# widgets.py
+
 import tkinter as tk
 from tkinter import ttk
 import platform
@@ -15,20 +17,23 @@ class ToolTip:
         self.widget.bind("<Destroy>", self.hide_tooltip)  # Ensure tooltip is hidden
 
     def show_tooltip(self, event=None):
-        x = self.widget.winfo_rootx() + 20
-        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 10
-        self.tooltip_window = tw = tk.Toplevel(self.widget)
-        tw.wm_overrideredirect(True)  # Remove window decorations
-        tw.wm_geometry(f"+{x}+{y}")
-        label = tk.Label(
-            tw,
-            text=self.text,
-            background="#FFFFE0",  # Light yellow background
-            relief="solid",
-            borderwidth=1,
-            font=("Arial", 10),
-        )
-        label.pack()
+        try:
+            x = self.widget.winfo_rootx() + 20
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 10
+            self.tooltip_window = tw = tk.Toplevel(self.widget)
+            tw.wm_overrideredirect(True)  # Remove window decorations
+            tw.wm_geometry(f"+{x}+{y}")
+            label = tk.Label(
+                tw,
+                text=self.text,
+                background="#FFFFE0",  # Light yellow background
+                relief="solid",
+                borderwidth=1,
+                font=("Arial", 10),
+            )
+            label.pack()
+        except Exception as e:
+            pass  # Handle exceptions silently
 
     def hide_tooltip(self, event=None):
         if self.tooltip_window:
@@ -46,12 +51,13 @@ def create_notebook(master):
     notebook.pack(fill="both", expand=True)
     return notebook
 
-def create_settings_tab(notebook, valid_class_codes):
+def create_settings_tab(notebook, valid_class_codes, class_names):
     """
     Create the Settings tab within the Notebook.
 
     :param notebook: The ttk.Notebook instance.
     :param valid_class_codes: List of valid class codes.
+    :param class_names: List of existing class names.
     :return: A dictionary containing widgets that need to be connected to actions.
     """
     settings_frame = ttk.Frame(notebook)
@@ -157,6 +163,18 @@ def create_settings_tab(notebook, valid_class_codes):
     export_all_button = ttk.Button(settings_main_frame, text="Export All")
     export_all_button.grid(row=row_counter, column=1, sticky="w", pady=5)
 
+    row_counter += 1
+
+    # Delete Class Section
+    delete_class_label = ttk.Label(settings_main_frame, text="Delete Existing Class")
+    delete_class_label.grid(row=row_counter, column=0, sticky="w", pady=5)
+
+    class_combo = ttk.Combobox(settings_main_frame, values=class_names, state="readonly")
+    class_combo.grid(row=row_counter, column=1, sticky="w", pady=5)
+
+    delete_class_button = ttk.Button(settings_main_frame, text="Delete Class")
+    delete_class_button.grid(row=row_counter, column=2, sticky="w", pady=5)
+
     # Return the widgets as a dictionary
     return {
         'delete_button': delete_button,
@@ -168,14 +186,14 @@ def create_settings_tab(notebook, valid_class_codes):
         'valid_class_codes_var': valid_class_codes_var,
         'import_html_button': import_html_button,
         'export_all_button': export_all_button,
+        'class_combo': class_combo,
+        'delete_class_button': delete_class_button,
     }
 
 def create_class_tab_widgets_with_photos(parent_frame):
     """
-    Create widgets for the Class tab, including buttons and student lists.
-
-    :param parent_frame: The parent frame where widgets will be placed.
-    :return: Tuple of widgets for further configuration.
+    Create widgets for the Class tab, including configurations to allow resizing
+    of the "Absent" and "Present" student lists when the window is resized.
     """
     # Main frame inside the attendance tab
     main_frame = ttk.Frame(parent_frame)
@@ -183,33 +201,30 @@ def create_class_tab_widgets_with_photos(parent_frame):
 
     # Configure grid to allow resizing
     main_frame.columnconfigure(0, weight=1)
-    main_frame.rowconfigure(1, weight=1)
+    main_frame.rowconfigure(1, weight=1)  # Allow row 1 (list_frame) to expand
     main_frame.rowconfigure(2, weight=0)
 
     button_frame = ttk.Frame(main_frame)
     button_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
 
     # Configure columns to expand appropriately
-    for i in range(9):
-        button_frame.columnconfigure(i, weight=1 if i == 8 else 0)
+    for i in range(8):  # Adjusted number of columns
+        button_frame.columnconfigure(i, weight=1 if i == 7 else 0)
     button_frame.rowconfigure(0, weight=0)
 
     # Place buttons using grid
-    import_button = ttk.Button(button_frame, text="Import Students")
-    import_button.grid(row=0, column=0, padx=5, sticky="w")
-
     add_student_button = ttk.Button(button_frame, text="Add Student")
-    add_student_button.grid(row=0, column=1, padx=5, sticky="w")
+    add_student_button.grid(row=0, column=0, padx=5, sticky="w")
 
     scan_toggle_button = ttk.Button(button_frame, text="Start Scanning")
-    scan_toggle_button.grid(row=0, column=2, padx=5, sticky="w")
+    scan_toggle_button.grid(row=0, column=1, padx=5, sticky="w")
 
     export_button = ttk.Button(button_frame, text="Export Attendance")
-    export_button.grid(row=0, column=3, padx=5, sticky="w")
+    export_button.grid(row=0, column=2, padx=5, sticky="w")
 
     # Add Scan Interval Dropdown
     interval_label = ttk.Label(button_frame, text="Scan Interval:")
-    interval_label.grid(row=0, column=4, padx=5, sticky="e")
+    interval_label.grid(row=0, column=3, padx=5, sticky="e")
 
     interval_options = [
         "5 seconds",
@@ -226,11 +241,11 @@ def create_class_tab_widgets_with_photos(parent_frame):
         state="readonly",
         width=10,
     )
-    interval_dropdown.grid(row=0, column=5, padx=5, sticky="w")
+    interval_dropdown.grid(row=0, column=4, padx=5, sticky="w")
 
     # Add Signal Strength Dropdown
     rssi_label = ttk.Label(button_frame, text="Signal Strength:")
-    rssi_label.grid(row=0, column=6, padx=5, sticky="e")
+    rssi_label.grid(row=0, column=5, padx=5, sticky="e")
 
     rssi_options = [
         "Very Close (> -50 dBm)",
@@ -247,28 +262,34 @@ def create_class_tab_widgets_with_photos(parent_frame):
         state="readonly",
         width=18,
     )
-    rssi_dropdown.grid(row=0, column=7, padx=5, sticky="w")
+    rssi_dropdown.grid(row=0, column=6, padx=5, sticky="w")
 
     quit_button = ttk.Button(button_frame, text="Quit")
-    quit_button.grid(row=0, column=8, padx=5, sticky="e")
+    quit_button.grid(row=0, column=7, padx=5, sticky="e")
 
-    list_frame = ttk.Frame(main_frame)
-    list_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
+    # List frame for present and absent students
+    paned_window = ttk.PanedWindow(main_frame, orient="horizontal")
+    paned_window.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
 
-    list_frame.columnconfigure(0, weight=1)
-    list_frame.columnconfigure(1, weight=1)
-    list_frame.rowconfigure(0, weight=1)
+    # Configure main_frame to allow expansion
+    main_frame.columnconfigure(0, weight=1)
+    main_frame.rowconfigure(1, weight=1)
 
-    present_frame_container = ttk.Frame(list_frame)
-    present_frame_container.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+    # Create frames for Present and Absent students
+    present_frame_container = ttk.Frame(paned_window)
+    absent_frame_container = ttk.Frame(paned_window)
 
-    absent_frame_container = ttk.Frame(list_frame)
-    absent_frame_container.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+    # Add the frames to the PanedWindow
+    paned_window.add(present_frame_container, weight=1)
+    paned_window.add(absent_frame_container, weight=1)
 
-    for frame in [present_frame_container, absent_frame_container]:
-        frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(1, weight=1)
+    # Configure frames to expand
+    present_frame_container.columnconfigure(0, weight=1)
+    present_frame_container.rowconfigure(1, weight=1)
+    absent_frame_container.columnconfigure(0, weight=1)
+    absent_frame_container.rowconfigure(1, weight=1)
 
+    # Labels for Present and Absent
     present_label = ttk.Label(present_frame_container, text="Present")
     present_label.grid(row=0, column=0, pady=5)
 
@@ -279,7 +300,6 @@ def create_class_tab_widgets_with_photos(parent_frame):
         button_frame,
         present_frame_container,
         absent_frame_container,
-        import_button,
         add_student_button,
         scan_toggle_button,
         interval_var,
@@ -297,39 +317,65 @@ def create_scrollable_frame(parent):
     """
     canvas = tk.Canvas(parent)
     v_scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+    h_scrollbar = ttk.Scrollbar(parent, orient="horizontal", command=canvas.xview)
     scrollable_frame = ttk.Frame(canvas)
 
     scrollable_frame.bind(
-        "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        "<Configure>",
+        lambda e: canvas.configure(
+            scrollregion=canvas.bbox("all")
+        )
     )
 
     canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-    canvas.configure(yscrollcommand=v_scrollbar.set)
+    canvas.configure(
+        yscrollcommand=v_scrollbar.set,
+        xscrollcommand=h_scrollbar.set,
+    )
 
     # Add scrollbars to the grid layout
-    canvas.grid(row=0, column=0, sticky="nsew")
-    v_scrollbar.grid(row=0, column=1, sticky="ns")
+    canvas.grid(row=1, column=0, sticky="nsew")
+    v_scrollbar.grid(row=1, column=1, sticky="ns")
+    h_scrollbar.grid(row=2, column=0, sticky="ew")
 
-    parent.grid_rowconfigure(0, weight=1)
-    parent.grid_columnconfigure(0, weight=1)
+    # Configure the parent frame to expand
+    parent.rowconfigure(1, weight=1)
+    parent.columnconfigure(0, weight=1)
 
     # Bind scroll events
     def _on_mousewheel(event):
         if platform.system() == "Windows":
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            if event.state & 0x1:  # Shift key is held down
+                canvas.xview_scroll(int(-1 * (event.delta / 120)), "units")
+            else:
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
         elif platform.system() == "Darwin":
-            canvas.yview_scroll(int(-1 * event.delta), "units")
+            if event.state & 0x1:  # Shift key is held down
+                canvas.xview_scroll(int(-1 * event.delta), "units")
+            else:
+                canvas.yview_scroll(int(-1 * event.delta), "units")
         else:  # Linux and other platforms
             if event.num == 4:
                 canvas.yview_scroll(-1, "units")
             elif event.num == 5:
                 canvas.yview_scroll(1, "units")
 
+    def _on_shift_mousewheel(event):
+        if platform.system() == "Windows":
+            canvas.xview_scroll(int(-1 * (event.delta / 120)), "units")
+        elif platform.system() == "Darwin":
+            canvas.xview_scroll(int(-1 * event.delta), "units")
+
+    # Bind scroll events to the canvas
+    canvas.bind("<Enter>", lambda e: canvas.focus_set())
+    canvas.bind("<Leave>", lambda e: canvas.focus_set())
+
     # Windows and macOS
-    canvas.bind_all("<MouseWheel>", _on_mousewheel)
+    canvas.bind("<MouseWheel>", _on_mousewheel)
+    canvas.bind("<Shift-MouseWheel>", _on_shift_mousewheel)
     # Linux
-    canvas.bind_all("<Button-4>", _on_mousewheel)
-    canvas.bind_all("<Button-5>", _on_mousewheel)
+    canvas.bind("<Button-4>", _on_mousewheel)
+    canvas.bind("<Button-5>", _on_mousewheel)
 
     return scrollable_frame
 
@@ -340,5 +386,21 @@ def change_theme(theme_name):
     :param theme_name: The name of the theme to apply.
     """
     style = ttk.Style()
-    style.theme_use(theme_name)
-    # Reconfigure custom styles if necessary
+    try:
+        style.theme_use(theme_name)
+        # Reconfigure custom styles if necessary
+    except Exception as e:
+        pass  # Handle exceptions silently
+
+def bind_tab_dragging(notebook, on_tab_press, on_tab_motion, on_tab_release):
+    """
+    Bind events for tab drag-and-drop functionality.
+
+    :param notebook: The ttk.Notebook instance.
+    :param on_tab_press: Function to handle tab press event.
+    :param on_tab_motion: Function to handle tab motion event.
+    :param on_tab_release: Function to handle tab release event.
+    """
+    notebook.bind("<ButtonPress-1>", on_tab_press, True)
+    notebook.bind("<ButtonRelease-1>", on_tab_release, True)
+    notebook.bind("<B1-Motion>", on_tab_motion, True)

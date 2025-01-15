@@ -15,7 +15,6 @@ pyperclip
 snakeviz
 pyprof2calltree
 pyinstrument
-zwerks
 flask
 django
 sqlalchemy

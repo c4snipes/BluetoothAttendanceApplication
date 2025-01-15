@@ -44,5 +44,5 @@ pip install -r requirements.txt
 After installing the dependencies, you can run the application using:
 
 ```bash
-python main.py
+python3 main.py
 ```
