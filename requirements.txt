@@ -1,4 +1,4 @@
-bleak==0.22.2
+bleak==0.20.0
 tkintertable
 pandas
 numpy
