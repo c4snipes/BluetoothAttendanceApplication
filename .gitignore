@@ -135,3 +135,4 @@ cacheconfig.pytest_cached
 ./attendance_app/image_cache/.png
 *.png
 .txt
+profiling_results.txt
