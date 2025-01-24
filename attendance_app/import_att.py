@@ -1,5 +1,4 @@
 # import_att.py
-
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import logging
@@ -10,38 +9,37 @@ from html_parse import parse_html_file, generate_photo_url, is_valid_url
 
 class ImportApp:
     """
-    Class to handle importing students from HTML files into the AttendanceManager,
-    using a background thread to avoid freezing the UI for large files.
+    Manages importing class/student data from an HTML file in a background thread to avoid freezing the GUI.
     """
-    def __init__(self, attendance_manager, master=None):
+
+    def __init__(self, attendance_manager, master=None, parent_gui=None):
         """
-        :param attendance_manager: The AttendanceManager instance.
-        :param master: (Optional) The parent Tk widget for dialogs.
+        :param attendance_manager: The AttendanceManager instance
+        :param master: A Tk root or parent widget
+        :param parent_gui: A reference to the main GUI (AttendanceApp) so we can create new tabs
         """
         self.attendance_manager = attendance_manager
         self.master = master
-        # We'll use a queue to pass results from the worker thread back to the main thread
+        self.parent_gui = parent_gui
         self._import_queue = queue.Queue()
         self._thread = None
         self._progress_popup = None
 
     def import_html_action(self):
         """
-        Start the import by opening a file dialog, then spawn a thread to parse the file.
+        Prompt user to pick an .html file, then parse/import in a background thread.
         """
         file_path = filedialog.askopenfilename(
             title="Select HTML File",
-            filetypes=[("HTML files", ("*.html", "*.htm")), ("All files", "*.*")]
+            filetypes=[("HTML files", "*.html *.htm"), ("All files", "*.*")]
         )
         if not file_path:
-            logging.info("User canceled HTML import action.")
-            return []
-        # Easiest fix: return an empty list instead of None
-    
-        # Show a "please wait" popup (optional)
+            logging.info("User canceled HTML import.")
+            return
+
         self._show_progress_popup("Importing from large HTML...")
 
-        # Create and start a background thread
+        # Start background thread to parse the file
         self._thread = threading.Thread(
             target=self._parse_and_import,
             args=(file_path,),
@@ -49,102 +47,92 @@ class ImportApp:
         )
         self._thread.start()
 
-        # Periodically check if the thread has results
+        # Periodically check if the thread is done
         self._check_thread_result()
 
     def _check_thread_result(self):
         """
-        Called periodically on the main thread to check if the worker thread is done.
-        If not done, we re-schedule it. If done, we handle the result.
+        Check if the background thread has posted results to _import_queue. If not, re-check after 200ms.
         """
         try:
-            success, message, class_names = self._import_queue.get_nowait()
+            success, msg, class_names = self._import_queue.get_nowait()
         except queue.Empty:
-            # Not done yet, check again in 200 ms
             if self.master:
                 self.master.after(200, self._check_thread_result)
             return
 
-        # The thread is done, close the progress popup
+        # If we get here, the thread is done
         self._close_progress_popup()
 
         if success:
-            # If classes were found
             if class_names:
-                messagebox.showinfo("Import Success", message)
-                logging.info(message)
+                # Create tabs for new classes
+                for cname in class_names:
+                    if self.parent_gui and cname not in self.parent_gui.class_widgets:
+                        self.parent_gui.create_class_tab(cname)
+
+                messagebox.showinfo("Import Success", msg)
+                logging.info(msg)
             else:
-                # No valid classes found
-                messagebox.showwarning("No Classes Found", message)
-                logging.warning(message)
+                # No classes were found but success is True
+                messagebox.showwarning("No Classes Found", msg)
+                logging.warning(msg)
         else:
-            # Error/exception
-            messagebox.showerror("Import Error", message)
-            logging.error(message)
+            # success == False => Some error occurred
+            messagebox.showerror("Import Error", msg)
+            logging.error(msg)
 
     def _parse_and_import(self, file_path):
         """
-        The worker thread function. We parse the HTML (via parse_html_file)
-        and import the students into the AttendanceManager. 
-        Then we put the result into the queue.
+        Worker thread: parse the HTML, import classes & students, then queue the result.
         """
         try:
-            valid_class_codes = self.attendance_manager.get_valid_class_codes()
-            class_students = parse_html_file(file_path, valid_class_codes)
+            valid_codes = self.attendance_manager.get_class_codes()
+            class_students = parse_html_file(file_path, valid_codes)
 
             if class_students:
-                # Import them into the manager
-                for class_name, students in class_students.items():
-                    self.attendance_manager.add_class(class_name)
-                    self.import_students_with_photos(class_name, students)
-                
-                msg = f"Students imported successfully from '{file_path}'."
+                for cname, stlist in class_students.items():
+                    # Ensure the class is created
+                    self.attendance_manager.register_class(cname)
+                    for student in stlist:
+                        # Possibly re-check or generate photo_url
+                        if not student.get('photo_url'):
+                            gen = generate_photo_url(student.get('name'), student.get('email'))
+                            student['photo_url'] = gen or ""
+                        if student['photo_url'] and not is_valid_url(student['photo_url']):
+                            logging.warning(f"Invalid photo URL for {student.get('student_id')}: {student['photo_url']}")
+                            student['photo_url'] = ""
+
+                        # If they have no student_id, skip or log
+                        if not student.get('student_id'):
+                            logging.warning(f"Missing student_id in {cname}: {student}")
+                            continue
+
+                        try:
+                            self.attendance_manager.add_student(cname, student)
+                            logging.info(f"Imported {student['student_id']} in {cname}")
+                        except Exception as e:
+                            logging.error(f"Error adding {student['student_id']} to {cname}: {e}")
+
+                msg = f"Students imported from '{file_path}'."
                 self._import_queue.put((True, msg, list(class_students.keys())))
             else:
-                msg = f"No valid classes found in the HTML file '{file_path}'."
+                msg = f"No valid classes found in '{file_path}'."
                 self._import_queue.put((True, msg, []))
+
         except Exception as e:
-            msg = f"Failed to import students from '{file_path}': {e}"
+            msg = f"Failed to import from '{file_path}': {e}"
             self._import_queue.put((False, msg, []))
 
-    def import_students_with_photos(self, class_name, students):
-        """
-        Actually add each student to the manager, generating/validating photo URLs
-        if needed. This runs in the worker thread as well.
-        """
-        for student in students:
-            student_id = student.get('student_id')
-            if not student_id:
-                logging.warning(f"Missing student_id in class '{class_name}': {student}")
-                continue
-
-            if not student.get('name'):
-                logging.warning(f"Missing name in class '{class_name}': {student}")
-                continue
-
-            # Possibly generate or check photo_url
-            if not student.get('photo_url'):
-                photo_url = generate_photo_url(student['name'], student.get('email'))
-                student['photo_url'] = photo_url if photo_url else ""
-
-            if student['photo_url'] and not is_valid_url(student['photo_url']):
-                logging.warning(f"Invalid photo URL for student '{student_id}': {student['photo_url']}")
-                student['photo_url'] = ""
-
-            try:
-                self.attendance_manager.add_student_to_class(class_name, student)
-                logging.info(f"Imported student '{student_id}' in class '{class_name}'.")
-            except ValueError as ve:
-                logging.error(f"Error adding student '{student_id}' to class '{class_name}': {ve}")
-                # skip to next
-
-    # ------------- UI HELPER METHODS -------------
     def _show_progress_popup(self, msg):
-        """Show a small popup to let the user know we're busy."""
+        """
+        Display a small "Please Wait" window while the import is happening.
+        """
         if not self.master:
             return
+
         self._progress_popup = tk.Toplevel(self.master)
-        self._progress_popup.title("Please Wait")
+        self._progress_popup.title("Importing...")
         self._progress_popup.geometry("300x100")
         self._progress_popup.resizable(False, False)
         self._progress_popup.grab_set()
@@ -152,17 +140,19 @@ class ImportApp:
         label = tk.Label(self._progress_popup, text=msg)
         label.pack(pady=20, padx=20)
 
-        # Optionally disable close button
+        # Disable user from closing this window
         self._progress_popup.protocol("WM_DELETE_WINDOW", lambda: None)
 
-        # Center it
+        # Center it on screen
         self._progress_popup.update_idletasks()
         x = (self._progress_popup.winfo_screenwidth() // 2) - (self._progress_popup.winfo_width() // 2)
         y = (self._progress_popup.winfo_screenheight() // 2) - (self._progress_popup.winfo_height() // 2)
         self._progress_popup.geometry(f"+{x}+{y}")
 
     def _close_progress_popup(self):
-        """Close the 'Please Wait' popup if it exists."""
+        """
+        Close the progress window if it exists.
+        """
         if self._progress_popup:
             self._progress_popup.destroy()
             self._progress_popup = None

@@ -1,73 +1,75 @@
-# export.py
-
 import logging
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import csv
 import os
+from attendance import AttendanceManager
 
 class Disseminate:
-    def __init__(self, master, attendance_manager):
-        """
-        Initialize the Disseminate class.
+    """
+    Handles the exporting of attendance data to CSV files.
+    Provides methods to export an individual class or all classes at once.
+    """
 
-        :param master: The root Tkinter window or a parent widget.
-        :param attendance_manager: An instance of AttendanceManager.
+    def __init__(self, master, attendance_manager: AttendanceManager):
+        """
+        :param master: A Tk root or parent widget
+        :param attendance_manager: The AttendanceManager instance
         """
         self.master = master
         self.attendance_manager = attendance_manager
 
     def export_all_classes(self):
         """
-        Export attendance data for all classes to a user-specified directory.
-        The user selects which fields to include in the export once for all classes.
+        Export attendance for every class to a chosen directory.
+        First prompts user to choose a directory and which columns to export.
         """
-        directory = filedialog.askdirectory(title="Select Directory to Save Attendance Files")
+        directory = filedialog.askdirectory(title="Select Directory to Save CSVs")
         if directory:
             try:
-                # Prompt user to select fields once for all classes
-                selected_fields = self.select_export_fields()
-                if not selected_fields:
-                    messagebox.showwarning("No Fields Selected", "No fields selected for export.")
-                    logging.warning("User did not select any fields for export.")
+                fields = self.select_export_fields()
+                if not fields:
+                    messagebox.showwarning("No Fields", "No fields chosen for export.")
+                    logging.warning("User chose no fields to export.")
                     return
 
-                for class_name in self.attendance_manager.classes:
-                    self.export_attendance(class_name, directory, selected_fields, bulk_export=True)
-                messagebox.showinfo("Export Success", "Attendance exported for all classes successfully.")
-                logging.info("Exported attendance for all classes.")
+                # Export each known class
+                for cname in self.attendance_manager.classes:
+                    self.export_attendance(cname, directory, fields, bulk_export=True)
+
+                messagebox.showinfo("Export Complete", "Exported all classes to CSV.")
             except Exception as e:
-                messagebox.showerror("Export All Error", f"Failed to export attendance: {e}")
-                logging.error(f"Failed to export attendance for all classes: {e}")
+                messagebox.showerror("Export Error", str(e))
+                logging.error(f"export_all_classes error: {e}")
         else:
-            logging.info("Export all classes operation canceled by user.")
+            logging.info("User canceled export_all_classes selection.")
 
     def export_attendance(self, class_name, directory=None, selected_fields=None, bulk_export=False):
         """
-        Export attendance data for a specific class.
-
-        :param class_name: Name of the class to export.
-        :param directory: Directory to save the CSV file. If None, prompts user to select.
-        :param selected_fields: List of fields to include in the export. If None, prompts user.
-        :param bulk_export: Boolean indicating if it's a bulk export (used to suppress individual field selection).
+        Export attendance for a single class to CSV.
+        :param class_name: Name of the class to export
+        :param directory: If given, place CSV here; else we ask user.
+        :param selected_fields: Columns chosen by the user
+        :param bulk_export: If True, skip the prompt for fields again.
         """
-        # List of exportable fields
-        all_fields = ["Student ID", "Name", "MAC Address", "Attendance Count", "Last Seen Time"]
+        all_fields = ["Student ID", "Name", "MAC Addresses", "Time-Based Count", "Last Seen Time"]
 
-        # If not bulk export and selected_fields not provided, prompt for field selection
+        # If we're not doing bulk export, we might need to prompt for fields again
         if not bulk_export and selected_fields is None:
             selected_fields = self.select_export_fields()
             if not selected_fields:
-                messagebox.showwarning("No Fields Selected", "No fields selected for export.")
-                logging.warning("User did not select any fields for export.")
                 return
 
-        # If bulk_export and selected_fields not provided, handle error
+        # If bulk_export is True but selected_fields is None, that's an error
         if bulk_export and selected_fields is None:
-            logging.error("Selected fields must be provided for bulk export.")
+            logging.error("Bulk export requires selected_fields but got None.")
             return
 
-        # Determine file path
+        # Ensure selected_fields is a list
+        if selected_fields is None:
+            selected_fields = []
+
+        # Determine the file path
         if directory:
             file_path = os.path.join(directory, f"{class_name}_attendance.csv")
         else:
@@ -75,142 +77,134 @@ class Disseminate:
                 defaultextension=".csv",
                 filetypes=[("CSV files", "*.csv")],
                 initialfile=f"{class_name}_attendance.csv",
-                title="Save Attendance As"
+                title="Save CSV As"
             )
 
-        if file_path:
-            try:
-                # Check if file already exists and confirm overwrite
-                if not bulk_export and os.path.exists(file_path):
-                    if not messagebox.askyesno("Overwrite Confirmation", f"The file '{os.path.basename(file_path)}' already exists. Do you want to overwrite it?"):
-                        logging.info(f"User canceled overwriting the file '{file_path}'.")
-                        return
+        if not file_path:
+            logging.info("User canceled single-class export.")
+            return
 
-                with open(file_path, "w", newline='', encoding='utf-8') as csvfile:
-                    writer = csv.writer(csvfile)
-                    writer.writerow(selected_fields or [])  # Write selected fields as headers
+        # Prompt user if file exists
+        if not bulk_export and os.path.exists(file_path):
+            if not messagebox.askyesno("Overwrite?", f"File '{os.path.basename(file_path)}' exists. Overwrite?"):
+                return
 
-                    # Gather and write student data
-                    students = self.attendance_manager.get_all_students(class_name)
-                    for student_id, student in students.items():
-                        row = []
-                        if selected_fields and "Student ID" in selected_fields:
-                            row.append(student_id)
-                        if selected_fields and "Name" in selected_fields:
-                            row.append(student.get("name", ""))
-                        if selected_fields and "MAC Address" in selected_fields:
-                            macs = self.attendance_manager.get_assigned_macs_for_student(class_name, student_id)
-                            row.append(', '.join(macs) if macs else "Unassigned")
-                        if selected_fields and "Attendance Count" in selected_fields:
-                            count = self.attendance_manager.get_attendance_count(class_name, student_id)
-                            row.append(count)
-                        if selected_fields and "Last Seen Time" in selected_fields:
-                            timestamp = self.attendance_manager.get_attendance_timestamp(class_name, student_id)
-                            row.append(timestamp.strftime('%Y-%m-%d %H:%M:%S') if timestamp else "Never")
-                        writer.writerow(row)
-                if bulk_export:
-                    logging.info(f"Exported attendance for class '{class_name}' to '{file_path}'.")
-                else:
-                    messagebox.showinfo("Export Success", f"Attendance for class '{class_name}' exported successfully.")
-                    logging.info(f"Exported attendance for class '{class_name}' to '{file_path}'.")
-            except Exception as e:
-                if bulk_export:
-                    messagebox.showerror("Export Error", f"Failed to export attendance for class '{class_name}': {e}")
-                    logging.error(f"Failed to export attendance for class '{class_name}': {e}")
-                else:
-                    messagebox.showerror("Export Error", f"Failed to export attendance: {e}")
-                    logging.error(f"Failed to export attendance for class '{class_name}': {e}")
-        else:
-            if not bulk_export:
-                logging.info("Export attendance operation canceled by user.")
-            # No action needed if bulk export and file path is not provided
+        try:
+            with open(file_path, "w", newline='', encoding='utf-8') as csvf:
+                writer = csv.writer(csvf)
+                writer.writerow(selected_fields)
+
+                # Gather data for this class
+                students = self.attendance_manager.get_all_students(class_name)
+
+                for sid, sdata in students.items():
+                    row = []
+                    # Fill in each column
+                    if "Student ID" in selected_fields:
+                        row.append(sid)
+                    if "Name" in selected_fields:
+                        row.append(sdata.get("name", ""))
+                    if "MAC Addresses" in selected_fields:
+                        macs = self.attendance_manager.list_macs_for_student(class_name, sid)
+                        row.append(", ".join(macs) if macs else "Unassigned")
+                    if "Time-Based Count" in selected_fields:
+                        tcount = self.attendance_manager.get_time_based_count(class_name, sid)
+                        row.append(tcount)
+                    if "Last Seen Time" in selected_fields:
+                        ts = self.attendance_manager.get_attendance_timestamp(class_name, sid)
+                        if ts:
+                            row.append(ts.strftime('%Y-%m-%d %H:%M:%S'))
+                        else:
+                            row.append("Never")
+
+                    writer.writerow(row)
+
+            if bulk_export:
+                logging.info(f"Exported '{class_name}' to '{file_path}'.")
+            else:
+                messagebox.showinfo("Exported", f"Exported '{class_name}' to '{file_path}'.")
+
+        except Exception as e:
+            logging.error(f"Failed to export {class_name}: {e}")
+            messagebox.showerror("Export Error", str(e))
 
     def select_export_fields(self):
         """
-        Prompt the user to select which fields to include in the export.
-
-        :return: A list of selected fields (e.g. ["Student ID", "Name", ...]).
+        Prompt the user to select which columns they want to export.
+        Returns a list of chosen fields, or [] if none are selected.
         """
-        selected_fields = []
+        fields = ["Student ID", "Name", "MAC Addresses", "Time-Based Count", "Last Seen Time"]
+        selected = []
 
-        # Create a new Toplevel window
-        export_popup = tk.Toplevel(self.master)
-        export_popup.title("Select Fields to Export")
-        export_popup.geometry("300x250")
-        export_popup.resizable(False, False)
-        export_popup.grab_set()  # Make the popup modal
+        popup = tk.Toplevel(self.master)
+        popup.title("Select Export Fields")
+        popup.geometry("320x300")
+        popup.resizable(False, False)
+        popup.grab_set()
 
-        # List of exportable fields
-        fields = ["Student ID", "Name", "MAC Address", "Attendance Count", "Last Seen Time"]
+        checks = {}
+        frm = ttk.Frame(popup)
+        frm.pack(pady=10, padx=10, anchor='w')
 
-        # Dictionary to store Checkbutton variables
-        checkboxes = {}
-
-        # A frame to place the checkboxes in
-        checkbox_frame = ttk.Frame(export_popup)
-        checkbox_frame.pack(pady=10, padx=10, anchor='w')
-
-        # Create checkboxes for each field, default them all to True
-        for field in fields:
+        # Create a checkbox for each possible field
+        for f in fields:
             var = tk.BooleanVar(value=True)
-            cb = ttk.Checkbutton(checkbox_frame, text=field, variable=var)
+            cb = ttk.Checkbutton(frm, text=f, variable=var)
             cb.pack(anchor='w', pady=2)
-            checkboxes[field] = var
+            checks[f] = var
 
-        # Button frame for "Export" and "Cancel" buttons
-        button_frame = ttk.Frame(export_popup)
-        button_frame.pack(pady=10)
+        btn_frame = ttk.Frame(popup)
+        btn_frame.pack(pady=10)
 
-        # Define the callbacks (on_export_confirm & on_export_cancel)
-
-        def on_export_confirm():
-            """
-            Gather selected fields and close the dialog.
-            """
-            selected = [f for f, var in checkboxes.items() if var.get()]
-            if selected:
-                selected_fields.extend(selected)
-                export_popup.destroy()
+        def on_confirm():
+            chosen = [f for f, var in checks.items() if var.get()]
+            if chosen:
+                selected.extend(chosen)
+                popup.destroy()
             else:
-                messagebox.showwarning("No Fields Selected", "Please select at least one field to export.")
-                logging.warning("User attempted to export without selecting any fields.")
+                messagebox.showwarning("No Fields", "Select at least one field to export.")
 
-        def on_export_cancel():
-            export_popup.destroy()
+        def on_cancel():
+            popup.destroy()
 
-        # 1) Define the Export button FIRST
-        export_btn = ttk.Button(button_frame, text="Export", command=on_export_confirm)
+        def on_select_all():
+            for var in checks.values():
+                var.set(True)
+
+        def on_deselect_all():
+            for var in checks.values():
+                var.set(False)
+
+        export_btn = ttk.Button(btn_frame, text="Export", command=on_confirm)
         export_btn.grid(row=0, column=0, padx=5)
 
-        # 2) Define the Cancel button
-        cancel_btn = ttk.Button(button_frame, text="Cancel", command=on_export_cancel)
+        cancel_btn = ttk.Button(btn_frame, text="Cancel", command=on_cancel)
         cancel_btn.grid(row=0, column=1, padx=5)
 
-        # 3) Now define the function that references `export_btn`
-        def update_export_button(*args):
-            """
-            Enable or disable the "Export" button based on whether at least
-            one checkbox is selected.
-            """
-            if any(var.get() for var in checkboxes.values()):
+        # "Select All" and "Deselect All" buttons
+        sa_btn = ttk.Button(btn_frame, text="Select All", command=on_select_all)
+        sa_btn.grid(row=1, column=0, padx=5, pady=(5,0))
+
+        da_btn = ttk.Button(btn_frame, text="Deselect All", command=on_deselect_all)
+        da_btn.grid(row=1, column=1, padx=5, pady=(5,0))
+
+        # Keep your update_button logic, to enable/disable the Export button
+        def update_button(*_):
+            if any(var.get() for var in checks.values()):
                 export_btn.config(state='normal')
             else:
                 export_btn.config(state='disabled')
 
-        # Bind each checkbox variable to update_export_button on change
-        for var in checkboxes.values():
-            var.trace_add('write', update_export_button)
+        for var in checks.values():
+            var.trace_add('write', update_button)
+        update_button()
 
-        # Manually call once so it sets the correct initial state
-        update_export_button()
+        # center on screen
+        popup.update_idletasks()
+        x = (self.master.winfo_screenwidth() // 2) - (popup.winfo_width() // 2)
+        y = (self.master.winfo_screenheight() // 2) - (popup.winfo_height() // 2)
+        popup.geometry(f"+{x}+{y}")
 
-        # Center the popup on screen
-        export_popup.update_idletasks()
-        x = (self.master.winfo_screenwidth() // 2) - (export_popup.winfo_width() // 2)
-        y = (self.master.winfo_screenheight() // 2) - (export_popup.winfo_height() // 2)
-        export_popup.geometry(f"+{x}+{y}")
-
-        # Wait until the popup is closed
-        self.master.wait_window(export_popup)
-
-        return selected_fields
+        # Block until the user closes the popup
+        self.master.wait_window(popup)
+        return selected

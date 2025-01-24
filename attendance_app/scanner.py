@@ -1,193 +1,143 @@
 # scanner.py
-
-import asyncio
 import threading
 import time
 import logging
-from bleak import BleakScanner  
+import asyncio
+from bleak import BleakScanner
 
 class Scanner:
     """
-    A class that scans for nearby Bluetooth devices using the Bleak library on a background thread.
+    A simple scanner that starts a background thread and calls
+    BleakScanner.discover(timeout=2) in a loop. There's NO graceful
+    stop_scanning—once started, you must quit the entire app.
     """
+
     def __init__(self, callback=None, rssi_threshold=-70, scan_interval=10):
         """
-        Initialize the Scanner.
-        
-        :param callback: A function to be called with the discovered devices (dict) whenever they change.
-        :param rssi_threshold: The minimum RSSI required to include a device in found_devices.
-                               RSSI stands for "Received Signal Strength Indicator," and
-                               it is a measure of the signal power (in dBm). Higher (less negative)
-                               means stronger signal. By default, -70 dBm is used; if a device's
-                               RSSI is below (i.e., more negative than) -70, it's ignored.
-        :param scan_interval: How many seconds to wait between scans.
+        :param callback: Function to call when new devices are found.
+                         Receives a dict { MAC_UPPER: {...}, ... }.
+        :param rssi_threshold: Minimum RSSI (dBm) to include device in the results.
+        :param scan_interval: Overall loop interval (seconds).
+                              Each cycle: 2-second BLE scan + (scan_interval - 2) sleep.
         """
         self.callback = callback
-        # The rssi_threshold is used to filter out devices with very weak signals.
-        # Example: If rssi_threshold is -70, only devices at -69, -60, -50, etc. (stronger signals)
-        #          are kept; devices at -71, -80, etc. are ignored.
         self.rssi_threshold = rssi_threshold
         self.scan_interval = scan_interval
 
         self.scanning = False
-        self.loop = None
         self.thread = None
+
+        # Lock if you want to change rssi_threshold or scan_interval safely on the fly.
         self.lock = threading.Lock()
-        # stop_event is used to tell the async loop to stop scanning when we want to stop.
-        self.stop_event = asyncio.Future()
 
     def start_scanning(self):
-        """Start scanning for Bluetooth devices, if not already scanning."""
-        try:
-            if not self.scanning:
-                self.scanning = True
-                self.loop = asyncio.new_event_loop()
-                self.stop_event = asyncio.Future()  # Re-initialize stop_event
-                self.thread = threading.Thread(target=self._run_loop, daemon=True)
-                self.thread.start()
-                logging.info("Started Bluetooth scanning.")
-            else:
-                logging.warning("Scanning is already active.")
-        except Exception as e:
-            logging.error(f"Error starting scanning: {e}")
+        """
+        Start scanning in a background thread. If already running, logs a warning.
+        """
+        if self.scanning:
+            logging.warning("Scanner is already running.")
+            return
 
-    def _run_loop(self):
-        """
-        The target function for our background thread.
-        It sets up an asyncio event loop to run 'scan_devices' until stopped.
-        """
-        asyncio.set_event_loop(self.loop)
-        try:
-            if self.loop:
-                self.loop.run_until_complete(self.scan_devices())
-            else:
-                logging.error("Event loop is not initialized.")
-        except Exception as e:
-            logging.error(f"Asyncio loop encountered an error: {e}")
-        finally:
-            if self.loop:
-                self.loop.close()
+        self.scanning = True
+        self.thread = threading.Thread(target=self._scan_loop, daemon=True)
+        self.thread.start()
+        logging.info("Started indefinite scanning. Must quit the app to end scanning.")
 
     def stop_scanning(self):
-        """Stop scanning for Bluetooth devices, if scanning is active."""
-        try:
+        """
+        No graceful stop is supported. You might call this from your GUI's
+        'Stop Scanning' button to just warn the user, or do nothing.
+        """
+        logging.warning("Stop scanning is NOT supported. Please quit the application to end scanning.")
+
+    def _scan_loop(self):
+        """
+        The background thread that does indefinite scanning:
+          - For each cycle, we run a 2s Bleak discovery,
+          - Filter devices by RSSI,
+          - Call self.callback if anything changed,
+          - Sleep the remainder of self.scan_interval (e.g. 8s if scan_interval=10),
+          - Repeat until the process exits (or forcibly kills the thread).
+        """
+        previous_found = {}
+        scan_count = 0
+
+        while True:
             if not self.scanning:
-                logging.warning("Scanning is already stopped.")
-                return
-            self.scanning = False
-            if self.loop and self.thread and self.thread.is_alive():
-                try:
-                    # Signal the scanning loop to stop via stop_event
-                    self.loop.call_soon_threadsafe(self.stop_event.set_result, True)
-                    # Cancel all pending tasks
-                    pending = asyncio.all_tasks(loop=self.loop)
-                    for task in pending:
-                        task.cancel()
-                    # Wait for the thread to finish
-                    if self.thread:
-                        self.thread.join(timeout=5)
-                    if self.thread and self.thread.is_alive():
-                        logging.warning("Scanning thread did not terminate gracefully.")
-                    else:
-                        logging.info("Scanning stopped gracefully.")
-                except Exception as e:
-                    logging.error(f"Error stopping scanning: {e}")
-            else:
-                logging.warning("No active scanning thread found.")
-        except Exception as e:
-            logging.error(f"Error in stop_scanning method: {e}")
+                # If you ever did set self.scanning=False, we'd break here.
+                # But in this design, we never do. The app must exit.
+                logging.info("Scanner loop is exiting—scanning was disabled.")
+                break
 
-    async def scan_devices(self):
-        """
-        Continuously scan for Bluetooth devices until stop_event is set.
-        After each scan, discovered devices (that meet the RSSI threshold) are passed to self.callback.
-        """
-        previous_found_devices = {}
-        try:
-            while not self.stop_event.done():
-                try:
-                    found_devices = {}
-                    # BleakScanner.discover() returns a list of BLEDevice objects
-                    nearby_devices = await BleakScanner.discover()
-                    current_time = time.time()
+            # Short scanning with a 2-second timeout
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                devices = loop.run_until_complete(
+                    BleakScanner.discover(timeout=2.0)
+                )
+            except Exception as e:
+                logging.error(f"Bleak scanning error: {e}")
+                devices = []
+            finally:
+                loop.close()
 
-                    # Safely read rssi_threshold and scan_interval under lock
-                    with self.lock:
-                        rssi_threshold = self.rssi_threshold
-                        scan_interval = self.scan_interval
-
-                    for device in nearby_devices:
-                        # device.rssi is the signal strength in dBm (negative numbers).
-                        # More negative means weaker signal; e.g., -80 dBm is weaker than -70 dBm.
-                        rssi = device.rssi
-
-                        # Keep only devices that pass our threshold.
-                        if rssi >= rssi_threshold:
-                            addr_upper = device.address.upper()
-                            found_devices[addr_upper] = {
-                                'name': device.name,
-                                'rssi': rssi,
-                                'timestamp': current_time
-                            }
-                            logging.debug(f"Found device: {device.name} "
-                                          f"({device.address}) with RSSI: {rssi}")
-
-                    # Only invoke callback if discovered devices differ from the last scan
-                    if found_devices != previous_found_devices:
-                        self.scan_devices_callback_wrapper(found_devices)
-                        previous_found_devices = found_devices.copy()
-
-                except asyncio.CancelledError:
-                    logging.info("Scanning task was cancelled.")
-                    break
-                except Exception as e:
-                    logging.error(f"Error during scanning: {e}")
-                finally:
-                    await asyncio.sleep(scan_interval)
-        except asyncio.CancelledError:
-            logging.info("Scanning loop was cancelled.")
-        except Exception as e:
-            logging.error(f"Unexpected error in scanning loop: {e}")
-        finally:
-            logging.info("Exiting scanning loop.")
-
-    def scan_devices_callback_wrapper(self, found_devices):
-        """
-        Invoke self.callback with the updated device dictionary.
-        The actual scheduling on main GUI thread (if needed) is handled by the callback itself.
-        """
-        try:
-            if self.callback:
-                self.callback(found_devices)
-        except Exception as e:
-            logging.error(f"Error in scan_devices_callback_wrapper: {e}")
-
-    def update_rssi_threshold(self, new_threshold):
-        """
-        Update the RSSI threshold (in dBm).
-        If a device's signal is weaker (lower) than this value, it won't be included.
-        """
-        try:
+            # Grab current settings safely
             with self.lock:
-                old_threshold = self.rssi_threshold
-                self.rssi_threshold = new_threshold
-            logging.info(f"Updated RSSI threshold from {old_threshold} dBm to {new_threshold} dBm.")
-        except Exception as e:
-            logging.error(f"Error updating RSSI threshold: {e}")
+                rssi_thresh = self.rssi_threshold
+                interval = self.scan_interval
 
-    def update_scan_interval(self, new_interval):
+            # Filter discovered devices by RSSI
+            found_devices = {}
+            now = time.time()
+            for dev in devices:
+                if dev.rssi >= rssi_thresh:
+                    mac_up = dev.address.upper()
+                    found_devices[mac_up] = {
+                        'name': dev.name,
+                        'rssi': dev.rssi,
+                        'timestamp': now,
+                        'scan_count': scan_count
+                    }
+
+            # If changed, notify callback
+            if found_devices != previous_found:
+                previous_found = dict(found_devices)
+                if self.callback:
+                    try:
+                        self.callback(found_devices)
+                    except Exception as cb_err:
+                        logging.error(f"Error in scanner callback: {cb_err}")
+
+            scan_count += 1
+
+            # Sleep the remainder of interval (minus 2s for scanning)
+            remainder = interval - 2
+            if remainder > 0:
+                time.sleep(remainder)
+
+        logging.info("Exiting scanner loop.")
+
+    def update_rssi_threshold(self, new_val):
         """
-        Update how many seconds to wait between scans.
+        Thread-safe update to rssi_threshold.
+        """
+        with self.lock:
+            old = self.rssi_threshold
+            self.rssi_threshold = new_val
+        logging.info(f"RSSI threshold changed from {old} to {new_val}.")
+
+    def update_scan_interval(self, new_val):
+        """
+        Thread-safe update to scan_interval (must be >= 2 if you want the 2s scan).
         """
         try:
-            new_interval = int(new_interval)
-            if new_interval < 1:
-                raise ValueError("Scan interval must be at least 1 second.")
+            n = int(new_val)
+            if n < 2:
+                raise ValueError("scan_interval must be >= 2.")
             with self.lock:
-                old_interval = self.scan_interval
-                self.scan_interval = new_interval
-            logging.info(f"Updated scan interval from {old_interval} seconds to {new_interval} seconds.")
+                old = self.scan_interval
+                self.scan_interval = n
+            logging.info(f"Scan interval changed from {old} to {n} seconds.")
         except ValueError as ve:
-            logging.error(f"Invalid scan interval update attempted: {ve}")
-        except Exception as e:
-            logging.error(f"Error updating scan interval: {e}")
+            logging.error(f"Invalid scan interval: {ve}")
