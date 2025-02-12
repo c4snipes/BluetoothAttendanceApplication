@@ -8,6 +8,7 @@ from tkinter import TclError, ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 from io import BytesIO
 from datetime import datetime
+
 from attendance import AttendanceManager
 from scanner import Scanner
 from export import Disseminate
@@ -342,19 +343,19 @@ class AttendanceApp:
     def _on_scan_results(self, found_devices: dict):
         """
         Runs on the main thread to update internal data and refresh the GUI with new scan results.
+        Now filters out blacklisted MAC addresses.
         """
         try:
             self.scan_count += 1
-            self.found_devices = found_devices
+            # Filter out devices in the blacklist:
+            blacklisted = self.attendance_manager.get_blacklisted_macs()
+            filtered_devices = {mac: info for mac, info in found_devices.items() if mac not in blacklisted}
+            self.found_devices = filtered_devices
             logging.info(f"Handling scan results, scan_count={self.scan_count}")
-
-            # Update attendance data with newly found devices
-            self.attendance_manager.update_from_scan(found_devices)
-
-            # Refresh each class tab to reflect who is present now
+            self.attendance_manager.update_from_scan(filtered_devices)
+            # Refresh each class tab to reflect updated attendance
             for cname in self.class_widgets.keys():
                 self.update_student_lists(cname)
-
         except Exception as e:
             logging.error(f"_on_scan_results error: {e}")
 
@@ -451,18 +452,17 @@ class AttendanceApp:
 
     def show_device_dropdown(self, parent_frame: ttk.Frame, class_name: str, student_id: str):
         """
-        Create a Combobox listing discovered devices. Selecting one assigns the MAC to the student.
+        Create a Combobox listing discovered devices (with scan counts) as well as already assigned MACs.
+        Selecting one assigns the MAC to the student.
         """
-        device_list = list(self.found_devices.items())  # => [(mac, { ...info... }), ...]
-        device_list.sort(key=lambda x: x[1]["scan_count"], reverse=True)
-
+        # Start with the found devices from the scanner:
+        device_list = list(self.found_devices.items())
+        device_list.sort(key=lambda x: x[1]["scan_count"])
         display_map = {}
-        # Build a label->MAC mapping
         for mac, info in device_list:
             short_mac = mac[-8:]
             count = info["scan_count"]
-
-            # Check if already assigned
+            # Check if the MAC is already assigned (to any student)
             is_assigned = False
             with self.attendance_manager.lock:
                 for cname, cdata in self.attendance_manager.classes.items():
@@ -472,13 +472,16 @@ class AttendanceApp:
                             break
                     if is_assigned:
                         break
-
+            label_text = f"{short_mac} (Count: {count})"
             if is_assigned:
-                label_text = f"{short_mac} (Count: {count}) - assigned"
-            else:
-                label_text = f"{short_mac} (Count: {count})"
-
+                label_text += " - assigned"
             display_map[label_text] = mac
+
+        # Also include any MACs already assigned to THIS student that might not be in found_devices.
+        assigned_macs = self.attendance_manager.list_macs_for_student(class_name, student_id)
+        for mac, count in assigned_macs.items():
+            label = f"{mac[-8:]} (Count: {count}) - assigned"
+            display_map[label] = mac
 
         var = tk.StringVar()
         combo = ttk.Combobox(
@@ -486,7 +489,7 @@ class AttendanceApp:
             textvariable=var,
             values=list(display_map.keys()),
             state="readonly",
-            width=15
+            width=20
         )
         combo.pack(pady=2)
 
@@ -496,14 +499,17 @@ class AttendanceApp:
                 messagebox.showwarning("No Match", "Please select a valid device from the dropdown.")
                 return
             real_mac = display_map[chosen]
-
+            # If the chosen MAC came from found_devices, get its scan_count; otherwise, use stored count.
+            if real_mac in self.found_devices:
+                count = self.found_devices[real_mac]["scan_count"]
+            else:
+                # fall back to 0 if not currently found
+                count = 0
             try:
-                # Assign the MAC
-                self.attendance_manager.assign_mac_to_student(class_name, student_id, real_mac)
-                # Optionally get full name
+                self.attendance_manager.assign_mac_to_student(class_name, student_id, real_mac, scan_count=count)
                 sdata = self.attendance_manager.classes[class_name]['students'].get(student_id, {})
                 st_name = sdata.get('name', f'ID: {student_id}')
-                messagebox.showinfo("Assigned", f"Assigned '{chosen}' to {st_name} (ID: {student_id}).")
+                messagebox.showinfo("Assigned", f"Assigned '{real_mac}' (Count: {count}) to {st_name} (ID: {student_id}).")
             except Exception as e:
                 logging.error(f"Error assigning MAC '{real_mac}' to {student_id}: {e}")
                 messagebox.showerror("Error", str(e))
@@ -808,3 +814,4 @@ class AttendanceApp:
         x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
         y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
         dialog.geometry(f"+{x}+{y}")
+

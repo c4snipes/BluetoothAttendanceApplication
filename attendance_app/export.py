@@ -45,31 +45,16 @@ class Disseminate:
             logging.info("User canceled export_all_classes selection.")
 
     def export_attendance(self, class_name, directory=None, selected_fields=None, bulk_export=False):
-        """
-        Export attendance for a single class to CSV.
-        :param class_name: Name of the class to export
-        :param directory: If given, place CSV here; else we ask user.
-        :param selected_fields: Columns chosen by the user
-        :param bulk_export: If True, skip the prompt for fields again.
-        """
         all_fields = ["Student ID", "Name", "MAC Addresses", "Time-Based Count", "Last Seen Time"]
-
-        # If we're not doing bulk export, we might need to prompt for fields again
         if not bulk_export and selected_fields is None:
             selected_fields = self.select_export_fields()
             if not selected_fields:
                 return
-
-        # If bulk_export is True but selected_fields is None, that's an error
         if bulk_export and selected_fields is None:
             logging.error("Bulk export requires selected_fields but got None.")
             return
-
-        # Ensure selected_fields is a list
         if selected_fields is None:
             selected_fields = []
-
-        # Determine the file path
         if directory:
             file_path = os.path.join(directory, f"{class_name}_attendance.csv")
         else:
@@ -79,55 +64,45 @@ class Disseminate:
                 initialfile=f"{class_name}_attendance.csv",
                 title="Save CSV As"
             )
-
         if not file_path:
             logging.info("User canceled single-class export.")
             return
-
-        # Prompt user if file exists
         if not bulk_export and os.path.exists(file_path):
             if not messagebox.askyesno("Overwrite?", f"File '{os.path.basename(file_path)}' exists. Overwrite?"):
                 return
-
         try:
             with open(file_path, "w", newline='', encoding='utf-8') as csvf:
                 writer = csv.writer(csvf)
                 writer.writerow(selected_fields)
-
-                # Gather data for this class
                 students = self.attendance_manager.get_all_students(class_name)
-
                 for sid, sdata in students.items():
                     row = []
-                    # Fill in each column
                     if "Student ID" in selected_fields:
                         row.append(sid)
                     if "Name" in selected_fields:
                         row.append(sdata.get("name", ""))
                     if "MAC Addresses" in selected_fields:
-                        macs = self.attendance_manager.list_macs_for_student(class_name, sid)
-                        row.append(", ".join(macs) if macs else "Unassigned")
+                        mac_dict = self.attendance_manager.list_macs_for_student(class_name, sid)
+                        if mac_dict:
+                            macs_str = ", ".join([f"{mac} (Count: {count})" for mac, count in mac_dict.items()])
+                            row.append(macs_str)
+                        else:
+                            row.append("Unassigned")
                     if "Time-Based Count" in selected_fields:
                         tcount = self.attendance_manager.get_time_based_count(class_name, sid)
                         row.append(tcount)
                     if "Last Seen Time" in selected_fields:
                         ts = self.attendance_manager.get_attendance_timestamp(class_name, sid)
-                        if ts:
-                            row.append(ts.strftime('%Y-%m-%d %H:%M:%S'))
-                        else:
-                            row.append("Never")
-
+                        row.append(ts.strftime('%Y-%m-%d %H:%M:%S') if ts else "Never")
                     writer.writerow(row)
-
             if bulk_export:
                 logging.info(f"Exported '{class_name}' to '{file_path}'.")
             else:
                 messagebox.showinfo("Exported", f"Exported '{class_name}' to '{file_path}'.")
-
         except Exception as e:
             logging.error(f"Failed to export {class_name}: {e}")
             messagebox.showerror("Export Error", str(e))
-
+            
     def select_export_fields(self):
         """
         Prompt the user to select which columns they want to export.

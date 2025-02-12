@@ -1,5 +1,3 @@
-# widgets.py
-
 import tkinter as tk
 from tkinter import ttk
 import platform
@@ -292,4 +290,3 @@ def bind_tab_dragging(notebook, on_tab_press, on_tab_motion, on_tab_release):
     notebook.bind("<ButtonPress-1>", on_tab_press, True)
     notebook.bind("<ButtonRelease-1>", on_tab_release, True)
     notebook.bind("<B1-Motion>", on_tab_motion, True)
-    
