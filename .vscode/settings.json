@@ -13,8 +13,11 @@
     "editor.formatOnSave": true,
     "editor.defaultFormatter": "ms-python.python",
     "editor.codeActionsOnSave": {
-        "dotnetAcquisitionExtension.excludedVersions": "8.0",
-        "dotnetAcquisitionExtension.enable": "false"
+        "dotnetAcquisitionExtension.excludedVersions": "never",
+        "dotnetAcquisitionExtension.enable": "never"
     },
-    "makefile.makePath": ".Makefile"
+    "makefile.makePath": ".Makefile",
+    "files.associations": {
+        "Makefile": "make"
+    }
 }
